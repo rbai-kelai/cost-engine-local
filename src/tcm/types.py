@@ -120,6 +120,10 @@ class BidAsk:
     def half_spread(self) -> Decimal:
         return (self.ask - self.bid) / Decimal(2)  # type: ignore[operator]
 
+    @property
+    def full_spread(self) -> Decimal:
+        return self.ask - self.bid  # type: ignore[operator]
+
 
 @dataclass(frozen=True)
 class FullSpreadBps:
@@ -150,7 +154,8 @@ class OneWaySpreadBps:
     """One-way spread cost already expressed in basis points. Not halved.
 
     Use this when the input is the cost of crossing from the mid to the touch,
-    rather than the full quoted width.
+    rather than the full quoted width. That one-way cost is the effective
+    half-spread term in an arrival-price / mid-to-touch decomposition.
     """
 
     bps: Number
@@ -223,7 +228,7 @@ class Fill:
 
 @dataclass(frozen=True, init=False)
 class Charge:
-    """One commission amount and the arithmetic that produced it."""
+    """One agency amount and the arithmetic that produced it."""
 
     name: str
     amount: Decimal
@@ -251,13 +256,20 @@ class FillEconomics:
 
 @dataclass(frozen=True)
 class OrderView:
-    """Quantity and notional a commission schedule sees for one order."""
+    """What an agency schedule sees for one order.
+
+    Side is required so sell-only fees (SEC Section 31, FINRA TAF) and buy-only
+    fees (UK stamp duty) can fire correctly.
+    """
 
     fills: tuple[FillEconomics, ...]
+    side: Side
 
     def __post_init__(self) -> None:
         if len(self.fills) == 0:
             raise TransactionCostError("an order must contain at least one fill")
+        if not isinstance(self.side, Side):
+            raise TransactionCostError("order side must be Side.BUY or Side.SELL")
 
     @property
     def quantity(self) -> Decimal:

@@ -36,10 +36,14 @@ def test_readme_example() -> None:
     assert result.commission_amount == Decimal("5")
     assert result.spread == Decimal("10")
     assert result.market_impact == Decimal("0")
+    assert result.residual == Decimal("0")
     assert result.total == Decimal("15")
-    assert result.total == result.commission_amount + result.spread + result.market_impact
+    assert result.total == (
+        result.agency_amount + result.spread + result.market_impact + result.residual
+    )
     assert result.total_bps == Decimal(15) / Decimal(50020) * Decimal(10000)
-    assert result.fills[0].market_impact_detail == "not modeled"
+    assert "deferred" in result.fills[0].market_impact_detail
+    assert "deferred" in result.fills[0].residual_detail
 
 
 def test_trading_through_the_quote_does_not_add_impact() -> None:
@@ -157,10 +161,14 @@ def test_report_rounds_bps_and_json_keeps_exact_decimals() -> None:
     blotter = model.cost_many([buy()])
     text = format_report(blotter)
     assert "Market impact: not modeled (0)" in text
+    assert "Residual (trend / opportunity): not modeled (0)" in text
     assert "2.9988 bps" in text
     payload = blotter_to_dict(blotter)
     assert payload["market_impact"] == "not_modeled"
+    assert payload["residual"] == "not_modeled"
     assert payload["market_impact_cost"] == "0"
+    assert payload["residual_cost"] == "0"
+    assert payload["agency"] == "5"
     assert payload["total"] == "15"
     assert Decimal(payload["total_bps"]) == cost_bps(Decimal("15"), Decimal("50020"))
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from tcm.model import BlotterCost, OrderCost
@@ -12,7 +12,9 @@ from tcm.types import Charge, cost_bps, dec_str
 def format_report(blotter: BlotterCost) -> str:
     lines = [
         "Transaction cost report",
+        "Decomposition: agency + spread + market impact + residual",
         "Market impact: not modeled (0)",
+        "Residual (trend / opportunity): not modeled (0)",
         "",
     ]
     if len(blotter.orders) == 0:
@@ -27,11 +29,15 @@ def format_report(blotter: BlotterCost) -> str:
 
 def blotter_to_dict(blotter: BlotterCost) -> dict[str, Any]:
     return {
+        "decomposition": "agency + spread + market_impact + residual",
         "market_impact": "not_modeled",
+        "residual": "not_modeled",
         "execution_notional": dec_str(blotter.execution_notional),
+        "agency": dec_str(blotter.agency),
         "commission": dec_str(blotter.commission),
         "spread": dec_str(blotter.spread),
         "market_impact_cost": dec_str(blotter.market_impact),
+        "residual_cost": dec_str(blotter.residual),
         "total": dec_str(blotter.total),
         "total_bps": dec_str(blotter.total_bps),
         "orders": [_order_to_dict(order) for order in blotter.orders],
@@ -46,9 +52,9 @@ def _format_order(order: OrderCost) -> list[str]:
     lines = [
         f"Order {order_label}  {label} {order.side.value}  {count} {noun}",
         f"  execution notional  {dec_str(order.execution_notional)}",
-        f"  commission          {dec_str(order.commission_amount)}",
+        f"  agency              {dec_str(order.agency_amount)}",
     ]
-    lines.extend(_commission_details(order.commission, indent=4))
+    lines.extend(_charge_details(order.agency, indent=4))
     lines.append(f"  spread              {dec_str(order.spread)}")
     for index, line in enumerate(order.fills, start=1):
         fill = line.fill
@@ -60,6 +66,8 @@ def _format_order(order: OrderCost) -> list[str]:
         lines.append(f"      {line.spread_detail}")
     lines.append(f"  market impact       {dec_str(order.market_impact)}")
     lines.append(f"      {order.fills[0].market_impact_detail}")
+    lines.append(f"  residual            {dec_str(order.residual)}")
+    lines.append(f"      {order.fills[0].residual_detail}")
     lines.append(
         f"  total               {dec_str(order.total)}"
         f"  ({_bps(order.total, order.execution_notional)} bps of execution notional)"
@@ -67,11 +75,11 @@ def _format_order(order: OrderCost) -> list[str]:
     return lines
 
 
-def _commission_details(charge: Charge, indent: int) -> list[str]:
+def _charge_details(charge: Charge, indent: int) -> list[str]:
     pad = " " * indent
     lines = [f"{pad}{charge.detail}"]
     for part in charge.parts:
-        lines.extend(_commission_details(part, indent + 2))
+        lines.extend(_charge_details(part, indent + 2))
     return lines
 
 
@@ -81,9 +89,10 @@ def _format_totals(title: str, blotter: BlotterCost) -> list[str]:
         title,
         f"  orders              {len(blotter.orders)}",
         f"  execution notional  {dec_str(notional)}",
-        f"  commission          {dec_str(blotter.commission)}  ({_bps(blotter.commission, notional)} bps)",
+        f"  agency              {dec_str(blotter.agency)}  ({_bps(blotter.agency, notional)} bps)",
         f"  spread              {dec_str(blotter.spread)}  ({_bps(blotter.spread, notional)} bps)",
         f"  market impact       {dec_str(blotter.market_impact)}  (not modeled)",
+        f"  residual            {dec_str(blotter.residual)}  (not modeled)",
         f"  total               {dec_str(blotter.total)}  ({_bps(blotter.total, notional)} bps)",
     ]
 
@@ -101,11 +110,15 @@ def _order_to_dict(order: OrderCost) -> dict[str, Any]:
         "side": order.side.value,
         "quantity": dec_str(order.quantity),
         "execution_notional": dec_str(order.execution_notional),
+        "agency": dec_str(order.agency_amount),
         "commission": dec_str(order.commission_amount),
-        "commission_detail": order.commission.detail,
+        "agency_detail": order.agency.detail,
+        "commission_detail": order.agency.detail,
         "spread": dec_str(order.spread),
         "market_impact": dec_str(order.market_impact),
         "market_impact_detail": "not modeled",
+        "residual": dec_str(order.residual),
+        "residual_detail": "not modeled",
         "total": dec_str(order.total),
         "total_bps": dec_str(order.total_bps),
         "fills": [
@@ -114,10 +127,12 @@ def _order_to_dict(order: OrderCost) -> dict[str, Any]:
                 "price": dec_str(line.fill.price),
                 "liquidity": line.fill.liquidity.value,
                 "execution_notional": dec_str(line.execution_notional),
-                "commission_allocated": dec_str(order.commission_allocated[index]),
+                "agency_allocated": dec_str(order.agency_allocated[index]),
+                "commission_allocated": dec_str(order.agency_allocated[index]),
                 "spread": dec_str(line.spread),
                 "spread_detail": line.spread_detail,
                 "market_impact": dec_str(line.market_impact),
+                "residual": dec_str(line.residual),
                 "total": dec_str(order.fill_total(index)),
             }
             for index, line in enumerate(order.fills)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "transaction-cost-model"
 version = "0.1.0"
-description = "Transaction cost model for commission and spread. Market impact is not included."
+description = "Transaction cost model for agency (commission + fees) and bid-ask spread. Market impact and residual costs are deferred."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

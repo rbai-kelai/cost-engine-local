@@ -1,4 +1,4 @@
-"""Transaction cost model: commission and spread, without market impact."""
+"""Transaction cost model: agency and spread, without market impact."""
 
 from tcm.commission import (
     AtLeast,
@@ -10,6 +10,7 @@ from tcm.commission import (
     PerFill,
     PerShare,
 )
+from tcm.fees import FinraTaf, OnBuy, OnSell, OnSide, SecFee, StampDuty
 from tcm.model import BlotterCost, OrderCost, TransactionCostModel
 from tcm.types import (
     BidAsk,
@@ -28,16 +29,22 @@ __all__ = [
     "BpsOfNotional",
     "Composite",
     "Fill",
+    "FinraTaf",
     "FlatFee",
     "FullSpreadBps",
     "Liquidity",
     "NoCommission",
+    "OnBuy",
+    "OnSell",
+    "OnSide",
     "OneWaySpreadBps",
     "OrderCost",
     "PercentOfNotional",
     "PerFill",
     "PerShare",
+    "SecFee",
     "Side",
+    "StampDuty",
     "TransactionCostError",
     "TransactionCostModel",
 ]

@@ -11,17 +11,19 @@ from tcm import (
     PercentOfNotional,
     PerFill,
     PerShare,
+    Side,
     TransactionCostError,
 )
 from tcm.types import FillEconomics, OrderView
 
 
-def order(qty: str, notional: str, fills: int = 1) -> OrderView:
+def order(qty: str, notional: str, fills: int = 1, side: Side = Side.BUY) -> OrderView:
     quantity = Decimal(qty)
     each_qty = quantity / fills
     each_notional = Decimal(notional) / fills
     return OrderView(
-        fills=tuple(FillEconomics(each_qty, each_notional) for _ in range(fills))
+        fills=tuple(FillEconomics(each_qty, each_notional) for _ in range(fills)),
+        side=side,
     )
 
 

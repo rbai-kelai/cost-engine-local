@@ -1,4 +1,13 @@
-"""Combine commission and spread for fills and blotters."""
+"""Combine agency (commission + fees) and spread for fills and blotters.
+
+Literature-aligned decomposition (Northfield / diBartolomeo):
+
+    total = agency + spread + market_impact + residual
+
+This release costs agency and spread. Market impact and residual are reported
+as zero. The half-spread is the transparent bid-ask cost of taking liquidity;
+it is not implementation shortfall and does not include size-dependent impact.
+"""
 
 from __future__ import annotations
 
@@ -7,20 +16,22 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from tcm.commission import CommissionSchedule
-from tcm.impact import market_impact
+from tcm.impact import market_impact, residual_cost
 from tcm.spread import spread_cost
 from tcm.types import Charge, Fill, FillEconomics, OrderView, TransactionCostError, cost_bps, to_decimal
 
 
 @dataclass(frozen=True)
 class FillSpread:
-    """Spread and the zero impact term for a single fill."""
+    """Spread plus deferred impact and residual terms for a single fill."""
 
     fill: Fill
     spread: Decimal
     spread_detail: str
     market_impact: Decimal
     market_impact_detail: str
+    residual: Decimal
+    residual_detail: str
 
     @property
     def execution_notional(self) -> Decimal:
@@ -29,16 +40,16 @@ class FillSpread:
 
 @dataclass(frozen=True)
 class OrderCost:
-    """Cost of one order: one commission charge plus each fill's spread."""
+    """Cost of one order: one agency charge plus each fill's spread."""
 
     order_id: str | None
     fills: tuple[FillSpread, ...]
-    commission: Charge
-    commission_allocated: tuple[Decimal, ...]
+    agency: Charge
+    agency_allocated: tuple[Decimal, ...]
 
     def __post_init__(self) -> None:
-        if len(self.fills) != len(self.commission_allocated):
-            raise TransactionCostError("commission allocation does not match fills")
+        if len(self.fills) != len(self.agency_allocated):
+            raise TransactionCostError("agency allocation does not match fills")
 
     @property
     def symbol(self) -> str:
@@ -57,8 +68,21 @@ class OrderCost:
         return sum((line.execution_notional for line in self.fills), Decimal(0))
 
     @property
+    def agency_amount(self) -> Decimal:
+        return self.agency.amount
+
+    @property
+    def commission(self) -> Charge:
+        """Alias for agency. Kept for callers that still say commission."""
+        return self.agency
+
+    @property
     def commission_amount(self) -> Decimal:
-        return self.commission.amount
+        return self.agency_amount
+
+    @property
+    def commission_allocated(self) -> tuple[Decimal, ...]:
+        return self.agency_allocated
 
     @property
     def spread(self) -> Decimal:
@@ -69,8 +93,12 @@ class OrderCost:
         return sum((line.market_impact for line in self.fills), Decimal(0))
 
     @property
+    def residual(self) -> Decimal:
+        return sum((line.residual for line in self.fills), Decimal(0))
+
+    @property
     def total(self) -> Decimal:
-        return self.commission_amount + self.spread + self.market_impact
+        return self.agency_amount + self.spread + self.market_impact + self.residual
 
     @property
     def total_bps(self) -> Decimal:
@@ -78,7 +106,12 @@ class OrderCost:
 
     def fill_total(self, index: int) -> Decimal:
         line = self.fills[index]
-        return self.commission_allocated[index] + line.spread + line.market_impact
+        return (
+            self.agency_allocated[index]
+            + line.spread
+            + line.market_impact
+            + line.residual
+        )
 
 
 @dataclass(frozen=True)
@@ -92,8 +125,13 @@ class BlotterCost:
         return sum((order.execution_notional for order in self.orders), Decimal(0))
 
     @property
+    def agency(self) -> Decimal:
+        return sum((order.agency_amount for order in self.orders), Decimal(0))
+
+    @property
     def commission(self) -> Decimal:
-        return sum((order.commission_amount for order in self.orders), Decimal(0))
+        """Alias for agency currency total."""
+        return self.agency
 
     @property
     def spread(self) -> Decimal:
@@ -104,8 +142,12 @@ class BlotterCost:
         return sum((order.market_impact for order in self.orders), Decimal(0))
 
     @property
+    def residual(self) -> Decimal:
+        return sum((order.residual for order in self.orders), Decimal(0))
+
+    @property
     def total(self) -> Decimal:
-        return self.commission + self.spread + self.market_impact
+        return self.agency + self.spread + self.market_impact + self.residual
 
     @property
     def total_bps(self) -> Decimal:
@@ -120,24 +162,37 @@ class BlotterCost:
 
 @dataclass(frozen=True)
 class TransactionCostModel:
-    """total = commission + spread, with market impact fixed at zero.
+    """total = agency + spread + market_impact + residual.
 
-    Spread for a taker is the half-spread from the quote (or from an explicit
-    spread in bps). The distance between the execution price and the touch is
-    not treated as a cost.
+    Agency is broker commission plus optional exchange / tax fees. Spread for
+    a taker is the half-spread from the quote (or from an explicit spread in
+    bps). Market impact and residual (trend / opportunity) are fixed at zero.
+
+    The distance between the execution price and the touch is not a cost here;
+    that is where size-dependent impact would go later.
+
+    ``commission`` is accepted as a synonym for ``agency``.
 
     maker_capture is the fraction of the half-spread a maker is assumed to
     earn, from 0 (no spread cost and no capture) to 1 (earns the full
     half-spread). It does not affect taker or midpoint fills.
     """
 
-    commission: CommissionSchedule
+    agency: CommissionSchedule | None = None
     maker_capture: Decimal | str | int = Decimal(0)
+    commission: CommissionSchedule | None = None
 
     def __post_init__(self) -> None:
+        if self.agency is None and self.commission is None:
+            raise TransactionCostError("provide agency= (or commission=) schedule")
+        if self.agency is not None and self.commission is not None and self.agency is not self.commission:
+            raise TransactionCostError("pass agency= or commission=, not both")
+        schedule = self.agency if self.agency is not None else self.commission
         capture = to_decimal(self.maker_capture, name="maker_capture")
         if capture < 0 or capture > 1:
             raise TransactionCostError("maker_capture must be between 0 and 1")
+        object.__setattr__(self, "agency", schedule)
+        object.__setattr__(self, "commission", schedule)
         object.__setattr__(self, "maker_capture", capture)
 
     def cost(self, fill: Fill) -> OrderCost:
@@ -150,7 +205,7 @@ class TransactionCostModel:
         return self.cost_many([fill]).orders[0]
 
     def cost_many(self, fills: Sequence[Fill]) -> BlotterCost:
-        """Cost fills, charging order-level commission once per order id.
+        """Cost fills, charging order-level agency once per order id.
 
         Fills with the same order id must share a symbol and a side. Fills
         with no order id are each charged as a separate order.
@@ -165,14 +220,16 @@ class TransactionCostModel:
             FillEconomics(quantity=fill.quantity, notional=fill.execution_notional)  # type: ignore[arg-type]
             for fill in fills
         )
-        commission = self.commission.charge(OrderView(economics))
+        schedule: CommissionSchedule = self.agency  # type: ignore[assignment]
+        agency = schedule.charge(OrderView(fills=economics, side=fills[0].side))
         weights = [fill.quantity for fill in fills]  # type: ignore[misc]
-        allocated = _allocate(commission.amount, weights)
+        allocated = _allocate(agency.amount, weights)
         capture: Decimal = self.maker_capture  # type: ignore[assignment]
         lines = []
         for fill in fills:
             spread, spread_detail = spread_cost(fill, maker_capture=capture)
             impact, impact_detail = market_impact()
+            residual, residual_detail = residual_cost()
             lines.append(
                 FillSpread(
                     fill=fill,
@@ -180,13 +237,15 @@ class TransactionCostModel:
                     spread_detail=spread_detail,
                     market_impact=impact,
                     market_impact_detail=impact_detail,
+                    residual=residual,
+                    residual_detail=residual_detail,
                 )
             )
         return OrderCost(
             order_id=fills[0].order_id,
             fills=tuple(lines),
-            commission=commission,
-            commission_allocated=tuple(allocated),
+            agency=agency,
+            agency_allocated=tuple(allocated),
         )
 
 
@@ -215,7 +274,7 @@ def _allocate(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
         return []
     weight_sum = sum(weights, Decimal(0))
     if weight_sum == 0:
-        raise TransactionCostError("cannot allocate commission across zero quantity")
+        raise TransactionCostError("cannot allocate agency across zero quantity")
     allocated: list[Decimal] = []
     running = Decimal(0)
     for index, weight in enumerate(weights):

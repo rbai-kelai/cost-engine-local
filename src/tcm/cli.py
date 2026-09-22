@@ -16,6 +16,7 @@ from tcm.commission import (
     NoCommission,
     PerShare,
 )
+from tcm.fees import FinraTaf, SecFee, StampDuty
 from tcm.model import TransactionCostModel
 from tcm.report import blotter_to_dict, format_report
 from tcm.types import (
@@ -48,8 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
-        commission = _commission(args)
-        model = TransactionCostModel(commission=commission, maker_capture=args.maker_capture)
+        commission = _agency(args)
+        model = TransactionCostModel(agency=commission, maker_capture=args.maker_capture)
         if args.command == "cost":
             blotter = model.cost_many([_fill_from_args(args)])
         else:
@@ -69,8 +70,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tcm",
         description=(
-            "Cost trades as commission plus spread. "
-            "Market impact is not modeled and is reported as zero."
+            "Cost trades as agency (commission + fees) plus bid-ask spread. "
+            "Market impact and residual (trend / opportunity) are not modeled."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -115,6 +116,25 @@ def _add_schedule_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--flat", help="Flat commission once per order")
     parser.add_argument("--commission-bps", help="Commission in bps of execution notional")
     parser.add_argument(
+        "--sec-fee",
+        metavar="RATE",
+        help="SEC Section 31 fee rate on sells (fraction of notional, e.g. 0.0000278)",
+    )
+    parser.add_argument(
+        "--finra-taf",
+        action="store_true",
+        help="Add illustrative FINRA TAF on sells (override with --finra-taf-rate / --finra-taf-cap)",
+    )
+    parser.add_argument("--finra-taf-rate", help="FINRA TAF rate per share")
+    parser.add_argument("--finra-taf-cap", help="FINRA TAF cap per order")
+    parser.add_argument(
+        "--stamp-duty",
+        nargs="?",
+        const="0.5",
+        metavar="PERCENT",
+        help="Stamp duty percent on buys (default 0.5 if flag is present without a value)",
+    )
+    parser.add_argument(
         "--maker-capture",
         default="0",
         help="Fraction of the half-spread a maker earns, from 0 to 1. Default 0.",
@@ -122,7 +142,7 @@ def _add_schedule_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Print JSON instead of text")
 
 
-def _commission(args: argparse.Namespace) -> CommissionSchedule:
+def _agency(args: argparse.Namespace) -> CommissionSchedule:
     minimum = to_decimal(args.min_commission, name="min commission")
     parts: list[CommissionSchedule] = []
     if args.per_share is not None:
@@ -133,6 +153,17 @@ def _commission(args: argparse.Namespace) -> CommissionSchedule:
         parts.append(FlatFee(args.flat))
     if args.commission_bps is not None:
         parts.append(BpsOfNotional(args.commission_bps))
+    if args.sec_fee is not None:
+        parts.append(SecFee(args.sec_fee))
+    if args.finra_taf or args.finra_taf_rate is not None or args.finra_taf_cap is not None:
+        taf_kwargs: dict[str, str] = {}
+        if args.finra_taf_rate is not None:
+            taf_kwargs["rate_per_share"] = args.finra_taf_rate
+        if args.finra_taf_cap is not None:
+            taf_kwargs["cap"] = args.finra_taf_cap
+        parts.append(FinraTaf(**taf_kwargs))
+    if args.stamp_duty is not None:
+        parts.append(StampDuty(args.stamp_duty))
     if len(parts) == 0:
         return NoCommission()
     if len(parts) == 1:

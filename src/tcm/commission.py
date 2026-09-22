@@ -1,4 +1,9 @@
-"""Commission schedules.
+"""Broker commission schedules (the broker piece of agency cost).
+
+Compose these with exchange and tax fees from ``tcm.fees`` via ``Composite``
+to build the full agency term in:
+
+    total = agency + spread + market_impact + residual
 
 A schedule is applied once per order. Fills that share an order id are one
 order; a fill with no order id is its own order. Per-share and bps amounts
@@ -169,7 +174,8 @@ class PerFill:
 
     def charge(self, order: OrderView) -> Charge:
         parts = tuple(
-            self.schedule.charge(OrderView(fills=(fill,))) for fill in order.fills
+            self.schedule.charge(OrderView(fills=(fill,), side=order.side))
+            for fill in order.fills
         )
         amount = sum((part.amount for part in parts), Decimal(0))
         detail = " + ".join(part.detail for part in parts)
