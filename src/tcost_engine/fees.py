@@ -1,7 +1,7 @@
 """Exchange, regulatory, and transfer fees.
 
-These are the non-broker pieces of agency cost in the Northfield / diBartolomeo
-decomposition (agency = broker commission + exchange / custody / tax fees).
+These are the non-broker pieces of commish cost in the Northfield / diBartolomeo
+decomposition (commish = broker commission + exchange / custody / tax fees).
 They are explicit and known in advance. Rates are configurable; defaults are
 illustrative placeholders and must be set to the live published rate before
 production use.

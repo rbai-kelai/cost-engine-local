@@ -2,11 +2,11 @@
 
 Not modeled yet. The literature (Northfield / diBartolomeo; Deutsche Bank;
 Bocconi survey of Almgren, Frazzini–Israel–Moskowitz) treats them as separate
-from agency fees and the bid-ask spread:
+from the bid-ask spread and from commish (commission + fees):
 
-    total = agency + spread + market_impact + residual
+    total = commish + spread + market_impact + residual
 
-Agency and spread are computed elsewhere. These two terms return zero so a
+Commish and spread are computed elsewhere. These two terms return zero so a
 later impact or trend/opportunity model can be plugged in beside them without
 redefining the explicit costs.
 

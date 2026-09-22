@@ -62,13 +62,13 @@ def test_on_buy_and_on_sell_wrappers() -> None:
     assert sell_only.charge(order_buy).amount == Decimal("0")
 
 
-def test_agency_composite_in_the_model() -> None:
-    agency = Composite(
+def test_commish_composite_in_the_model() -> None:
+    commish = Composite(
         PerShare("0.005", minimum="1"),
         SecFee("0.0000278"),
         FinraTaf(rate_per_share="0.000166", cap="8.30"),
     )
-    model = TransactionCostModel(agency=agency)
+    model = TransactionCostModel(commish=commish)
     buy = model.cost(
         Fill(
             symbol="AAPL",
@@ -88,11 +88,11 @@ def test_agency_composite_in_the_model() -> None:
         )
     )
     # Buy: commission 5, no SEC/TAF. Spread 10.
-    assert buy.agency_amount == Decimal("5")
+    assert buy.commish_amount == Decimal("5")
     assert buy.spread == Decimal("10")
     assert buy.total == Decimal("15")
     # Sell: commission 5 + SEC 1.39 + TAF 0.166 = 6.556. Spread 10.
-    assert sell.agency_amount == Decimal("6.556")
+    assert sell.commish_amount == Decimal("6.556")
     assert sell.total == Decimal("16.556")
     assert sell.residual == Decimal("0")
     assert sell.market_impact == Decimal("0")

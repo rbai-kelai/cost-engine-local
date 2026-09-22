@@ -39,7 +39,7 @@ def test_readme_example() -> None:
     assert result.residual == Decimal("0")
     assert result.total == Decimal("15")
     assert result.total == (
-        result.agency_amount + result.spread + result.market_impact + result.residual
+        result.commish_amount + result.spread + result.market_impact + result.residual
     )
     assert result.total_bps == Decimal(15) / Decimal(50020) * Decimal(10000)
     assert "deferred" in result.fills[0].market_impact_detail
@@ -168,7 +168,7 @@ def test_report_rounds_bps_and_json_keeps_exact_decimals() -> None:
     assert payload["residual"] == "not_modeled"
     assert payload["market_impact_cost"] == "0"
     assert payload["residual_cost"] == "0"
-    assert payload["agency"] == "5"
+    assert payload["commish"] == "5"
     assert payload["total"] == "15"
     assert Decimal(payload["total_bps"]) == cost_bps(Decimal("15"), Decimal("50020"))
 

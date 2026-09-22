@@ -1,9 +1,9 @@
-"""Broker commission schedules (the broker piece of agency cost).
+"""Broker commission schedules (the broker piece of commish cost).
 
 Compose these with exchange and tax fees from ``tcost_engine.fees`` via ``Composite``
-to build the full agency term in:
+to build the full commish term in:
 
-    total = agency + spread + market_impact + residual
+    total = commish + spread + market_impact + residual
 
 A schedule is applied once per order. Fills that share an order id are one
 order; a fill with no order id is its own order. Per-share and bps amounts

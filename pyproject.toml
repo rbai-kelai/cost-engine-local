@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tcost-engine"
 version = "0.1.0"
-description = "Transaction cost engine for agency (commission + fees) and bid-ask spread. Market impact and residual costs are deferred."
+description = "Transaction cost engine for commish (commission + fees) and bid-ask spread. Market impact and residual costs are deferred."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

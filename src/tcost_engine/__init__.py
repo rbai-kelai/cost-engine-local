@@ -1,4 +1,4 @@
-"""tcost-engine: agency and spread transaction costs, without market impact."""
+"""tcost-engine: commish and spread transaction costs, without market impact."""
 
 from tcost_engine.commission import (
     AtLeast,

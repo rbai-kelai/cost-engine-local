@@ -1,10 +1,10 @@
-"""Combine agency (commission + fees) and spread for fills and blotters.
+"""Combine commish (commission + fees) and spread for fills and blotters.
 
 Literature-aligned decomposition (Northfield / diBartolomeo):
 
-    total = agency + spread + market_impact + residual
+    total = commish + spread + market_impact + residual
 
-This release costs agency and spread. Market impact and residual are reported
+This release costs commish and spread. Market impact and residual are reported
 as zero. The half-spread is the transparent bid-ask cost of taking liquidity;
 it is not implementation shortfall and does not include size-dependent impact.
 """
@@ -40,16 +40,16 @@ class FillSpread:
 
 @dataclass(frozen=True)
 class OrderCost:
-    """Cost of one order: one agency charge plus each fill's spread."""
+    """Cost of one order: one commish charge plus each fill's spread."""
 
     order_id: str | None
     fills: tuple[FillSpread, ...]
-    agency: Charge
-    agency_allocated: tuple[Decimal, ...]
+    commish: Charge
+    commish_allocated: tuple[Decimal, ...]
 
     def __post_init__(self) -> None:
-        if len(self.fills) != len(self.agency_allocated):
-            raise TransactionCostError("agency allocation does not match fills")
+        if len(self.fills) != len(self.commish_allocated):
+            raise TransactionCostError("commish allocation does not match fills")
 
     @property
     def symbol(self) -> str:
@@ -68,21 +68,21 @@ class OrderCost:
         return sum((line.execution_notional for line in self.fills), Decimal(0))
 
     @property
-    def agency_amount(self) -> Decimal:
-        return self.agency.amount
+    def commish_amount(self) -> Decimal:
+        return self.commish.amount
 
     @property
     def commission(self) -> Charge:
-        """Alias for agency. Kept for callers that still say commission."""
-        return self.agency
+        """Alias for commish. Kept for callers that still say commission."""
+        return self.commish
 
     @property
     def commission_amount(self) -> Decimal:
-        return self.agency_amount
+        return self.commish_amount
 
     @property
     def commission_allocated(self) -> tuple[Decimal, ...]:
-        return self.agency_allocated
+        return self.commish_allocated
 
     @property
     def spread(self) -> Decimal:
@@ -98,7 +98,7 @@ class OrderCost:
 
     @property
     def total(self) -> Decimal:
-        return self.agency_amount + self.spread + self.market_impact + self.residual
+        return self.commish_amount + self.spread + self.market_impact + self.residual
 
     @property
     def total_bps(self) -> Decimal:
@@ -107,7 +107,7 @@ class OrderCost:
     def fill_total(self, index: int) -> Decimal:
         line = self.fills[index]
         return (
-            self.agency_allocated[index]
+            self.commish_allocated[index]
             + line.spread
             + line.market_impact
             + line.residual
@@ -125,13 +125,13 @@ class BlotterCost:
         return sum((order.execution_notional for order in self.orders), Decimal(0))
 
     @property
-    def agency(self) -> Decimal:
-        return sum((order.agency_amount for order in self.orders), Decimal(0))
+    def commish(self) -> Decimal:
+        return sum((order.commish_amount for order in self.orders), Decimal(0))
 
     @property
     def commission(self) -> Decimal:
-        """Alias for agency currency total."""
-        return self.agency
+        """Alias for commish currency total."""
+        return self.commish
 
     @property
     def spread(self) -> Decimal:
@@ -147,7 +147,7 @@ class BlotterCost:
 
     @property
     def total(self) -> Decimal:
-        return self.agency + self.spread + self.market_impact + self.residual
+        return self.commish + self.spread + self.market_impact + self.residual
 
     @property
     def total_bps(self) -> Decimal:
@@ -162,36 +162,36 @@ class BlotterCost:
 
 @dataclass(frozen=True)
 class TransactionCostModel:
-    """total = agency + spread + market_impact + residual.
+    """total = commish + spread + market_impact + residual.
 
-    Agency is broker commission plus optional exchange / tax fees. Spread for
+    Commish is broker commission plus optional exchange / tax fees. Spread for
     a taker is the half-spread from the quote (or from an explicit spread in
     bps). Market impact and residual (trend / opportunity) are fixed at zero.
 
     The distance between the execution price and the touch is not a cost here;
     that is where size-dependent impact would go later.
 
-    ``commission`` is accepted as a synonym for ``agency``.
+    ``commission`` is accepted as a synonym for ``commish``.
 
     maker_capture is the fraction of the half-spread a maker is assumed to
     earn, from 0 (no spread cost and no capture) to 1 (earns the full
     half-spread). It does not affect taker or midpoint fills.
     """
 
-    agency: CommissionSchedule | None = None
+    commish: CommissionSchedule | None = None
     maker_capture: Decimal | str | int = Decimal(0)
     commission: CommissionSchedule | None = None
 
     def __post_init__(self) -> None:
-        if self.agency is None and self.commission is None:
-            raise TransactionCostError("provide agency= (or commission=) schedule")
-        if self.agency is not None and self.commission is not None and self.agency is not self.commission:
-            raise TransactionCostError("pass agency= or commission=, not both")
-        schedule = self.agency if self.agency is not None else self.commission
+        if self.commish is None and self.commission is None:
+            raise TransactionCostError("provide commish= (or commission=) schedule")
+        if self.commish is not None and self.commission is not None and self.commish is not self.commission:
+            raise TransactionCostError("pass commish= or commission=, not both")
+        schedule = self.commish if self.commish is not None else self.commission
         capture = to_decimal(self.maker_capture, name="maker_capture")
         if capture < 0 or capture > 1:
             raise TransactionCostError("maker_capture must be between 0 and 1")
-        object.__setattr__(self, "agency", schedule)
+        object.__setattr__(self, "commish", schedule)
         object.__setattr__(self, "commission", schedule)
         object.__setattr__(self, "maker_capture", capture)
 
@@ -205,7 +205,7 @@ class TransactionCostModel:
         return self.cost_many([fill]).orders[0]
 
     def cost_many(self, fills: Sequence[Fill]) -> BlotterCost:
-        """Cost fills, charging order-level agency once per order id.
+        """Cost fills, charging order-level commish once per order id.
 
         Fills with the same order id must share a symbol and a side. Fills
         with no order id are each charged as a separate order.
@@ -220,10 +220,10 @@ class TransactionCostModel:
             FillEconomics(quantity=fill.quantity, notional=fill.execution_notional)  # type: ignore[arg-type]
             for fill in fills
         )
-        schedule: CommissionSchedule = self.agency  # type: ignore[assignment]
-        agency = schedule.charge(OrderView(fills=economics, side=fills[0].side))
+        schedule: CommissionSchedule = self.commish  # type: ignore[assignment]
+        commish = schedule.charge(OrderView(fills=economics, side=fills[0].side))
         weights = [fill.quantity for fill in fills]  # type: ignore[misc]
-        allocated = _allocate(agency.amount, weights)
+        allocated = _allocate(commish.amount, weights)
         capture: Decimal = self.maker_capture  # type: ignore[assignment]
         lines = []
         for fill in fills:
@@ -244,8 +244,8 @@ class TransactionCostModel:
         return OrderCost(
             order_id=fills[0].order_id,
             fills=tuple(lines),
-            agency=agency,
-            agency_allocated=tuple(allocated),
+            commish=commish,
+            commish_allocated=tuple(allocated),
         )
 
 
@@ -274,7 +274,7 @@ def _allocate(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
         return []
     weight_sum = sum(weights, Decimal(0))
     if weight_sum == 0:
-        raise TransactionCostError("cannot allocate agency across zero quantity")
+        raise TransactionCostError("cannot allocate commish across zero quantity")
     allocated: list[Decimal] = []
     running = Decimal(0)
     for index, weight in enumerate(weights):

@@ -49,8 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
-        commission = _agency(args)
-        model = TransactionCostModel(agency=commission, maker_capture=args.maker_capture)
+        commission = _commish(args)
+        model = TransactionCostModel(commish=commission, maker_capture=args.maker_capture)
         if args.command == "cost":
             blotter = model.cost_many([_fill_from_args(args)])
         else:
@@ -70,7 +70,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tcost-engine",
         description=(
-            "Cost trades as agency (commission + fees) plus bid-ask spread. "
+            "Cost trades as commish (commission + fees) plus bid-ask spread. "
             "Market impact and residual (trend / opportunity) are not modeled."
         ),
     )
@@ -142,7 +142,7 @@ def _add_schedule_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Print JSON instead of text")
 
 
-def _agency(args: argparse.Namespace) -> CommissionSchedule:
+def _commish(args: argparse.Namespace) -> CommissionSchedule:
     minimum = to_decimal(args.min_commission, name="min commission")
     parts: list[CommissionSchedule] = []
     if args.per_share is not None:

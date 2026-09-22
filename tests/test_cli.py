@@ -29,7 +29,7 @@ def test_cost_command_matches_the_readme_example(capsys) -> None:
     )
     assert code == 0
     out = capsys.readouterr().out
-    assert "agency              5" in out
+    assert "commish             5" in out
     assert "spread              10" in out
     assert "market impact       0" in out
     assert "residual            0" in out
@@ -51,7 +51,7 @@ def test_blotter_command_on_the_example_file(capsys) -> None:
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["commission"] == "7"
-    assert payload["agency"] == "7"
+    assert payload["commish"] == "7"
     assert payload["spread"] == "30"
     assert payload["market_impact"] == "not_modeled"
     assert payload["residual"] == "not_modeled"

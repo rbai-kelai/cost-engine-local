@@ -228,7 +228,7 @@ class Fill:
 
 @dataclass(frozen=True, init=False)
 class Charge:
-    """One agency amount and the arithmetic that produced it."""
+    """One commish amount and the arithmetic that produced it."""
 
     name: str
     amount: Decimal
@@ -256,7 +256,7 @@ class FillEconomics:
 
 @dataclass(frozen=True)
 class OrderView:
-    """What an agency schedule sees for one order.
+    """What a commish schedule sees for one order.
 
     Side is required so sell-only fees (SEC Section 31, FINRA TAF) and buy-only
     fees (UK stamp duty) can fire correctly.

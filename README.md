@@ -4,16 +4,16 @@ Costs a trade with the Northfield / diBartolomeo decomposition used across the
 execution literature (also echoed by Deutsche Bank and Bocconi surveys):
 
 ```text
-total = agency + spread + market_impact + residual
+total = commish + spread + market_impact + residual
 ```
 
-This release costs **agency** and **spread**. Market impact and residual are
+This release costs **commish** and **spread**. Market impact and residual are
 reported as zero so they can be added later without redefining the explicit
 terms.
 
 | Term | Status | Meaning |
 | --- | --- | --- |
-| Agency | Modeled | Broker commission + exchange / regulatory / transfer fees. Explicit and known in advance. |
+| Commish | Modeled | Broker commission + exchange / regulatory / transfer fees. Explicit and known in advance. |
 | Spread | Modeled | Bid-ask half-spread for taking liquidity. Transparent. |
 | Market impact | Deferred (`0`) | Size-dependent price move from *this* trade (temporary / permanent; often √size). |
 | Residual | Deferred (`0`) | Trend cost (other flow) and opportunity cost of slow or incomplete fills. |
@@ -28,9 +28,9 @@ price and the touch is not a cost here — that is where market impact belongs
 later. For a taker at the touch, the spread term *is* the mid-to-touch /
 effective half-spread piece of arrival-price cost.
 
-## Agency
+## Commish
 
-Agency is charged once per order. Fills that share an `order_id` are one order.
+Commish is charged once per order. Fills that share an `order_id` are one order.
 A fill with no `order_id` is its own order. Use `cost_many` for a blotter so a
 minimum or flat fee is not charged again on every fill.
 
@@ -63,7 +63,7 @@ Compose with commission via `Composite`. Side-aware fees need the order side
 | `StampDuty(percent=0.5)` | `percent / 100 × buy notional` (UK SDRT-style). Sells are zero. |
 | `OnBuy(schedule)` / `OnSell(schedule)` | Apply any schedule on one side only. |
 
-When an order has several fills, the order agency charge is split across them
+When an order has several fills, the order commish charge is split across them
 pro rata by quantity so the fill totals add up.
 
 ## Spread
@@ -129,8 +129,8 @@ Cursor / VS Code is set to use `.venv/bin/python` (see `.vscode/settings.json`).
 from tcost_engine import BidAsk, Composite, Fill, FinraTaf, PerShare, SecFee, TransactionCostModel
 from tcost_engine.report import format_report
 
-agency = Composite(PerShare("0.005", minimum="1"), SecFee("0.0000278"), FinraTaf())
-model = TransactionCostModel(agency=agency)
+commish = Composite(PerShare("0.005", minimum="1"), SecFee("0.0000278"), FinraTaf())
+model = TransactionCostModel(commish=commish)
 fill = Fill(
     symbol="AAPL",
     side="buy",
@@ -139,7 +139,7 @@ fill = Fill(
     spread=BidAsk("50.00", "50.02"),
 )
 result = model.cost(fill)
-print(result.agency_amount)   # 5  (SEC/TAF are sell-only)
+print(result.commish_amount)   # 5  (SEC/TAF are sell-only)
 print(result.spread)          # 10
 print(result.market_impact)   # 0
 print(result.residual)        # 0
@@ -147,7 +147,7 @@ print(result.total)           # 15
 print(format_report(model.cost_many([fill])))
 ```
 
-`commission=` is accepted as a synonym for `agency=`.
+`commission=` is accepted as a synonym for `commish=`.
 
 ## CLI
 
@@ -166,7 +166,7 @@ Pass exactly one spread: `--bid` and `--ask`, or `--full-spread-bps`, or
 `--min-commission` applies to the per-share schedule and requires `--per-share`.
 
 `examples/blotter.csv` is three orders. With `$0.005` per share and a `$1` order
-minimum, the blotter totals are agency 7, spread 30, impact 0, residual 0, total 37.
+minimum, the blotter totals are commish 7, spread 30, impact 0, residual 0, total 37.
 
 ## Tests
 
@@ -179,8 +179,9 @@ pytest
 Inspiration drawn from:
 
 - **Northfield Transaction Cost Model** / **diBartolomeo (2007)** — total cost =
-  agency + bid/ask + market impact + trend; agency and spread are estimable in
-  advance; impact needs size-dependent functional form with boundary conditions.
+  agency (our `commish`) + bid/ask + market impact + trend; `commish` and spread
+  are estimable in advance; impact needs size-dependent functional form with
+  boundary conditions.
 - **Deutsche Bank, *A Portfolio Manager’s Guidebook to Trade Execution* (2015)** —
   for discretionary execution, the two intraday cost metrics are bid-ask spread
   and price impact; half-spread is the immediate cost of aggressive liquidity-taking.
@@ -188,4 +189,4 @@ Inspiration drawn from:
   effective cost vs mid; opportunity cost and implementation shortfall as separate
   ideas from the touch spread.
 - **Frazzini, Israel, Moskowitz (2017)** — live-trade calibrated impact curves;
-  ~`$0.005`/share commission as a practical US agency baseline.
+  ~`$0.005`/share commission as a practical US `commish` baseline.
