@@ -86,8 +86,11 @@ def test_maker_capture_zero_one_and_midpoint() -> None:
     half = TransactionCostModel(NoCommission(), maker_capture="0.5").cost(fill)
     midpoint = TransactionCostModel(NoCommission()).cost(_fill(liquidity="midpoint"))
     assert none.spread == Decimal("0")
+    assert "0 × 0.01 × 1000 = 0" in none.fills[0].spread_detail
     assert full.spread == Decimal("-10")
+    assert "-1 × 0.01 × 1000 = -10" in full.fills[0].spread_detail
     assert half.spread == Decimal("-5")
+    assert "-0.5 × 0.01 × 1000 = -5" in half.fills[0].spread_detail
     assert midpoint.spread == Decimal("0")
     assert "midpoint" in midpoint.fills[0].spread_detail
 

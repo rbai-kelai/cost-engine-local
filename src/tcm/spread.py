@@ -55,8 +55,8 @@ def spread_cost(fill: Fill, *, maker_capture: Decimal) -> tuple[Decimal, str]:
     if fill.liquidity is Liquidity.MAKER:
         amount = -maker_capture * gross
         detail = (
-            f"maker capture {dec_str(maker_capture)} × half-spread {half_detail}"
-            f" × {dec_str(quantity)} = {dec_str(amount)}"
+            f"maker earns {dec_str(maker_capture)} of half-spread {half_detail}; "
+            f"{dec_str(-maker_capture)} × {dec_str(half)} × {dec_str(quantity)} = {dec_str(amount)}"
         )
         return amount, detail
     raise TypeError(f"unsupported liquidity: {fill.liquidity!r}")
