@@ -116,10 +116,12 @@ bps to 0.0001 for display.
 ## Install
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+Cursor / VS Code is set to use `.venv/bin/python` (see `.vscode/settings.json`). After creating the venv, reload the window if the interpreter banner is still showing.
 
 ## Library
 
