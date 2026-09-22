@@ -5,13 +5,13 @@ from __future__ import annotations
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
-from tcm.model import BlotterCost, OrderCost
-from tcm.types import Charge, cost_bps, dec_str
+from tcost_engine.model import BlotterCost, OrderCost
+from tcost_engine.types import Charge, cost_bps, dec_str
 
 
 def format_report(blotter: BlotterCost) -> str:
     lines = [
-        "Transaction cost report",
+        "tcost-engine report",
         "Decomposition: agency + spread + market impact + residual",
         "Market impact: not modeled (0)",
         "Residual (trend / opportunity): not modeled (0)",

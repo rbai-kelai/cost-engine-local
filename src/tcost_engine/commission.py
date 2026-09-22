@@ -1,6 +1,6 @@
 """Broker commission schedules (the broker piece of agency cost).
 
-Compose these with exchange and tax fees from ``tcm.fees`` via ``Composite``
+Compose these with exchange and tax fees from ``tcost_engine.fees`` via ``Composite``
 to build the full agency term in:
 
     total = agency + spread + market_impact + residual
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from tcm.types import Charge, Number, OrderView, TransactionCostError, dec_str, to_decimal
+from tcost_engine.types import Charge, Number, OrderView, TransactionCostError, dec_str, to_decimal
 
 
 class CommissionSchedule(Protocol):

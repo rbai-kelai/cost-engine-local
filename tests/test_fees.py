@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from tcm import (
+from tcost_engine import (
     BidAsk,
     Composite,
     Fill,
@@ -16,7 +16,7 @@ from tcm import (
     TransactionCostError,
     TransactionCostModel,
 )
-from tcm.types import FillEconomics, OrderView
+from tcost_engine.types import FillEconomics, OrderView
 
 
 def view(side: Side, qty: str = "1000", notional: str = "50000") -> OrderView:

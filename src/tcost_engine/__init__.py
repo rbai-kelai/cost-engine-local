@@ -1,6 +1,6 @@
-"""Transaction cost model: agency and spread, without market impact."""
+"""tcost-engine: agency and spread transaction costs, without market impact."""
 
-from tcm.commission import (
+from tcost_engine.commission import (
     AtLeast,
     BpsOfNotional,
     Composite,
@@ -10,9 +10,9 @@ from tcm.commission import (
     PerFill,
     PerShare,
 )
-from tcm.fees import FinraTaf, OnBuy, OnSell, OnSide, SecFee, StampDuty
-from tcm.model import BlotterCost, OrderCost, TransactionCostModel
-from tcm.types import (
+from tcost_engine.fees import FinraTaf, OnBuy, OnSell, OnSide, SecFee, StampDuty
+from tcost_engine.model import BlotterCost, OrderCost, TransactionCostModel
+from tcost_engine.types import (
     BidAsk,
     Fill,
     FullSpreadBps,

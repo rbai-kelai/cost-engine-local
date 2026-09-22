@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from tcm import (
+from tcost_engine import (
     AtLeast,
     BpsOfNotional,
     Composite,
@@ -14,7 +14,7 @@ from tcm import (
     Side,
     TransactionCostError,
 )
-from tcm.types import FillEconomics, OrderView
+from tcost_engine.types import FillEconomics, OrderView
 
 
 def order(qty: str, notional: str, fills: int = 1, side: Side = Side.BUY) -> OrderView:

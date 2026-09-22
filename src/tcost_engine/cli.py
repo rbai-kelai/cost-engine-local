@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from tcm.commission import (
+from tcost_engine.commission import (
     BpsOfNotional,
     CommissionSchedule,
     Composite,
@@ -16,10 +16,10 @@ from tcm.commission import (
     NoCommission,
     PerShare,
 )
-from tcm.fees import FinraTaf, SecFee, StampDuty
-from tcm.model import TransactionCostModel
-from tcm.report import blotter_to_dict, format_report
-from tcm.types import (
+from tcost_engine.fees import FinraTaf, SecFee, StampDuty
+from tcost_engine.model import TransactionCostModel
+from tcost_engine.report import blotter_to_dict, format_report
+from tcost_engine.types import (
     BidAsk,
     Fill,
     FullSpreadBps,
@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="tcm",
+        prog="tcost-engine",
         description=(
             "Cost trades as agency (commission + fees) plus bid-ask spread. "
             "Market impact and residual (trend / opportunity) are not modeled."

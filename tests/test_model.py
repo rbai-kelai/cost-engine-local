@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from tcm import (
+from tcost_engine import (
     BidAsk,
     BpsOfNotional,
     Composite,
@@ -13,8 +13,8 @@ from tcm import (
     TransactionCostError,
     TransactionCostModel,
 )
-from tcm.report import blotter_to_dict, format_report
-from tcm.types import cost_bps
+from tcost_engine.report import blotter_to_dict, format_report
+from tcost_engine.types import cost_bps
 
 
 def buy(**overrides: object) -> Fill:

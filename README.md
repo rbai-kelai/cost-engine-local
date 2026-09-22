@@ -1,4 +1,4 @@
-# Transaction cost model
+# tcost-engine
 
 Costs a trade with the Northfield / diBartolomeo decomposition used across the
 execution literature (also echoed by Deutsche Bank and Bocconi surveys):
@@ -124,8 +124,8 @@ pip install -e ".[dev]"
 ## Library
 
 ```python
-from tcm import BidAsk, Composite, Fill, FinraTaf, PerShare, SecFee, TransactionCostModel
-from tcm.report import format_report
+from tcost_engine import BidAsk, Composite, Fill, FinraTaf, PerShare, SecFee, TransactionCostModel
+from tcost_engine.report import format_report
 
 agency = Composite(PerShare("0.005", minimum="1"), SecFee("0.0000278"), FinraTaf())
 model = TransactionCostModel(agency=agency)
@@ -150,12 +150,12 @@ print(format_report(model.cost_many([fill])))
 ## CLI
 
 ```bash
-tcm cost --symbol AAPL --side buy --qty 1000 --price 50.02 \
+tcost-engine cost --symbol AAPL --side buy --qty 1000 --price 50.02 \
   --bid 50.00 --ask 50.02 --per-share 0.005
 
-tcm blotter examples/blotter.csv --per-share 0.005 --min-commission 1
+tcost-engine blotter examples/blotter.csv --per-share 0.005 --min-commission 1
 
-tcm cost --side sell --qty 1000 --price 50 --bid 49.99 --ask 50.01 \
+tcost-engine cost --side sell --qty 1000 --price 50 --bid 49.99 --ask 50.01 \
   --per-share 0.005 --sec-fee 0.0000278 --finra-taf
 ```
 

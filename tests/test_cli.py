@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from tcm.cli import main
+from tcost_engine.cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 BLOTTER = ROOT / "examples" / "blotter.csv"
