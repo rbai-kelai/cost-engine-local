@@ -1,0 +1,5 @@
+symbol,side,quantity,price,bid,ask,liquidity,order_id
+AAPL,buy,600,50.02,50.00,50.02,taker,ord-1
+AAPL,buy,400,50.03,50.01,50.03,taker,ord-1
+MSFT,sell,200,420.10,420.00,420.20,taker,ord-2
+SPY,buy,100,500.05,500.00,500.10,maker,ord-3

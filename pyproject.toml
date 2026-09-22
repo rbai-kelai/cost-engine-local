@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transaction-cost-model"
+version = "0.1.0"
+description = "Transaction cost model for commission and spread. Market impact is not included."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+tcm = "tcm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tcm = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
