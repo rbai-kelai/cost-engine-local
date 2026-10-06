@@ -179,7 +179,12 @@ Spread = Union[BidAsk, FullSpreadBps, OneWaySpreadBps]
 
 @dataclass(frozen=True)
 class Fill:
-    """One execution. Quantity is unsigned; side carries the direction."""
+    """One execution. Quantity is unsigned; side carries the direction.
+
+    ``price`` is the VWAP (execution). ``close`` is the close benchmark used for
+    VWAP−close slippage when present. ``spread`` is typically the EOD bid/ask
+    used as a proxy for that day's intraday quoted width.
+    """
 
     side: Side | str
     quantity: Number
@@ -188,6 +193,7 @@ class Fill:
     symbol: str = ""
     liquidity: Liquidity | str = Liquidity.TAKER
     order_id: str | None = None
+    close: Number | None = None
 
     def __post_init__(self) -> None:
         side = self.side if isinstance(self.side, Side) else Side.parse(str(self.side))
@@ -214,16 +220,27 @@ class Fill:
                 raise TransactionCostError(
                     "order_id cannot be blank; omit it to treat the fill as its own order"
                 )
+        close = self.close
+        if close is not None:
+            close = to_decimal(close, name="close")
+            if close <= 0:
+                raise TransactionCostError("close must be positive")
         object.__setattr__(self, "side", side)
         object.__setattr__(self, "quantity", quantity)
         object.__setattr__(self, "price", price)
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "liquidity", liquidity)
         object.__setattr__(self, "order_id", order_id)
+        object.__setattr__(self, "close", close)
 
     @property
     def execution_notional(self) -> Decimal:
         return self.quantity * self.price  # type: ignore[operator]
+
+    @property
+    def vwap(self) -> Decimal:
+        """Execution / VWAP price (alias for ``price``)."""
+        return self.price  # type: ignore[return-value]
 
 
 @dataclass(frozen=True, init=False)

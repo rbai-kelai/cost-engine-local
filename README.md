@@ -7,26 +7,21 @@ execution literature (also echoed by Deutsche Bank and Bocconi surveys):
 total = commish + spread + market_impact + residual
 ```
 
-This release costs **commish** and **spread**. Market impact and residual are
-reported as zero so they can be added later without redefining the explicit
-terms.
-
 | Term | Status | Meaning |
 | --- | --- | --- |
-| Commish | Modeled | Broker commission + exchange / regulatory / transfer fees. Explicit and known in advance. |
-| Spread | Modeled | Bid-ask half-spread for taking liquidity. Transparent. |
+| Commish | Modeled | Fixed broker commission at **10 mils/share** (`$0.001`; 1 mil = `$0.0001`), plus optional fees. |
+| Spread | Modeled | Bid-ask half-spread. LSEG EOD bid/ask are the proxy for that day's intraday spread. |
 | Market impact | Deferred (`0`) | Size-dependent price move from *this* trade (temporary / permanent; often √size). |
-| Residual | Deferred (`0`) | Trend cost (other flow) and opportunity cost of slow or incomplete fills. |
+| Residual | Modeled | VWAP vs close benchmark slippage: `side × (VWAP − close) × qty`. |
 
 Amounts are in the price currency. Inputs are `Decimal`, `str`, or `int`. Floats
 are rejected so a value like `0.005` cannot pick up a binary fraction. Positive
 amounts are costs paid by the trader. A rebate or a maker spread capture is
 negative.
 
-This is not an implementation-shortfall model. The gap between the execution
-price and the touch is not a cost here — that is where market impact belongs
-later. For a taker at the touch, the spread term *is* the mid-to-touch /
-effective half-spread piece of arrival-price cost.
+`Fill.price` is the VWAP (execution). `Fill.close` is the close benchmark for
+slippage. Spread uses EOD bid/ask as an intraday-width proxy — not fill-time
+quotes. Size-dependent market impact is still deferred.
 
 ## Commish
 
@@ -38,7 +33,7 @@ minimum or flat fee is not charged again on every fill.
 
 | Schedule | Charge |
 | --- | --- |
-| `PerShare(rate, minimum=0)` | `max(rate × order quantity, minimum)` |
+| `PerShare(mils, minimum=0)` | `max(mils / 10,000 × order quantity, minimum)`. One mil is `$0.0001`/share. |
 | `FlatFee(amount)` | `amount` once per order |
 | `BpsOfNotional(bps, minimum=0)` | `max(execution notional × bps / 10,000, minimum)` |
 | `PercentOfNotional(percent, minimum=0)` | `max(execution notional × percent / 100, minimum)`. 1% is 100 bps. |
@@ -47,9 +42,9 @@ minimum or flat fee is not charged again on every fill.
 | `AtLeast(schedule, minimum)` | Floor on the combined order charge. |
 | `NoCommission()` | Zero. |
 
-Execution notional is `quantity × execution price`. A minimum is a floor on what
-the trader pays. Leave it at 0 when the rate is a rebate. Frazzini–Israel–Moskowitz
-(2017) cite about `$0.005` per share as a representative US institutional commission.
+Execution notional is `quantity × VWAP`. A minimum is a floor on what the trader
+pays. Leave it at 0 when the rate is a rebate. The house fixed commission is
+**10 mils** (`$0.001` per share).
 
 ### Fees and taxes
 
@@ -68,9 +63,11 @@ pro rata by quantity so the fill totals add up.
 
 ## Spread
 
-Spread is the quoted width, not slippage past the touch. Deutsche Bank’s PM
-guidebook treats bid-ask spread and price impact as the two *intraday* cost
-levers; we model the first and leave the second at zero.
+Spread is the quoted width, not VWAP−close slippage. With LSEG Datastream2,
+`BID` / `ASK` are closing prints used as a **proxy for that day's intraday
+spread**. Deutsche Bank’s PM guidebook treats bid-ask spread and price impact
+as the two *intraday* cost levers; we model the first from EOD quotes and leave
+size-dependent impact at zero.
 
 For a bid/ask, the one-way cost of taking liquidity is the half-spread:
 
@@ -98,11 +95,23 @@ and the taker cost in bps of execution notional equals that one-way spread exact
 pays no spread and is not credited with earning one. At 1, the maker earns the
 full half-spread.
 
-## Deferred terms
+## Residual — VWAP vs close slippage
+
+When `Fill.close` is set, residual is the close-benchmark slippage of a VWAP
+fill (also exposed as `OrderCost.slippage` / `BlotterCost.slippage`):
+
+```text
+slippage = side × (VWAP − close) × quantity
+```
+
+with buy = `+1` and sell = `−1`. That equals **−intraday mark-to-close PnL**
+from the VWAP fill. Omit `close` to leave residual at zero.
+
+## Deferred term
 
 Market impact (Almgren-style / Northfield linear + √size with takeover boundary
-conditions) and residual trend / opportunity cost are stubs that return zero.
-They appear in reports so the four-term identity stays visible.
+conditions) remains a stub at zero so a size-dependent model can be added later
+without redefining the explicit terms.
 
 ## Basis points
 
@@ -126,24 +135,25 @@ Cursor / VS Code is set to use `.venv/bin/python` (see `.vscode/settings.json`).
 ## Library
 
 ```python
-from tcost_engine import BidAsk, Composite, Fill, FinraTaf, PerShare, SecFee, TransactionCostModel
+from tcost_engine import BidAsk, Fill, PerShare, TransactionCostModel
 from tcost_engine.report import format_report
 
-commish = Composite(PerShare("0.005", minimum="1"), SecFee("0.0000278"), FinraTaf())
-model = TransactionCostModel(commish=commish)
+model = TransactionCostModel(commish=PerShare("10"))  # house fixed 10 mils
 fill = Fill(
     symbol="AAPL",
     side="buy",
     quantity="1000",
-    price="50.02",
-    spread=BidAsk("50.00", "50.02"),
+    price="50.02",          # VWAP
+    close="50.00",          # close benchmark
+    spread=BidAsk("50.00", "50.02"),  # EOD bid/ask proxy
 )
 result = model.cost(fill)
-print(result.commish_amount)   # 5  (SEC/TAF are sell-only)
+print(result.commish_amount)  # 1   (10 mils × 1000 / 10000)
 print(result.spread)          # 10
 print(result.market_impact)   # 0
-print(result.residual)        # 0
-print(result.total)           # 15
+print(result.residual)        # 20  (= slippage)
+print(result.slippage)        # 20
+print(result.total)           # 31
 print(format_report(model.cost_many([fill])))
 ```
 
@@ -153,20 +163,158 @@ print(format_report(model.cost_many([fill])))
 
 ```bash
 tcost-engine cost --symbol AAPL --side buy --qty 1000 --price 50.02 \
-  --bid 50.00 --ask 50.02 --per-share 0.005
+  --close 50.00 --bid 50.00 --ask 50.02
 
-tcost-engine blotter examples/blotter.csv --per-share 0.005 --min-commission 1
+tcost-engine blotter examples/blotter.csv
 
-tcost-engine cost --side sell --qty 1000 --price 50 --bid 49.99 --ask 50.01 \
-  --per-share 0.005 --sec-fee 0.0000278 --finra-taf
+tcost-engine cost --side sell --qty 1000 --price 50 --close 50.10 \
+  --bid 49.99 --ask 50.01 --sec-fee 0.0000278 --finra-taf
 ```
 
+`--mils` defaults to **10**. Pass `--mils 0` for a spread/slippage-only run.
 Pass exactly one spread: `--bid` and `--ask`, or `--full-spread-bps`, or
 `--one-way-spread-bps`. Add `--json` for decimal amounts as strings.
-`--min-commission` applies to the per-share schedule and requires `--per-share`.
 
-`examples/blotter.csv` is three orders. With `$0.005` per share and a `$1` order
-minimum, the blotter totals are commish 7, spread 30, impact 0, residual 0, total 37.
+`examples/blotter.csv` is three orders with VWAP, close, and EOD bid/ask. At
+10 mils, totals are commish 1.3, spread 30, impact 0, residual (slippage) 45,
+total 76.3.
+
+## Combo SOD t-costs
+
+Cost day-over-day trades from a wide combo SOD dollar panel (DatetimeIndex ×
+INFOCODE) against LSEG Datastream2 `VWAP` / `CLOSE` (VWAP fills — **no**
+separate half-spread):
+
+```text
+delta_$ = SOD(t) − SOD(t−1)
+qty     = |delta_$| / VWAP(t)
+total   = 10-mil commish + side×(VWAP−CLOSE)×qty
+```
+
+Default SOD artifact:
+
+`s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet`
+
+```bash
+pip install -e ".[lseg]"
+
+tcost-engine cost-combo \
+  --sod s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet \
+  --start 2021-01-01 --end 2026-10-01 \
+  -o data/combo_tcost_daily.parquet
+```
+
+`--mils` defaults to 10. Rows missing vwap/close are dropped (counts printed
+in the summary). Run on the team box where the Datastream2 H5 already lives,
+or pass `--h5` / rely on the S3 fallback.
+
+### debug_perturb — pre vs post t-cost (mosek-style)
+
+Debugger perturb like `signal-sel-opt`’s Stage C / MOSEK tables: yearly
+`Year / n_days / medGMV / Sharpe / ret / vol / maxDD / daily TO`, side-by-side
+**pre-tcost | post-tcost**, artifacts under `outputs/perturb_tcost/`.
+
+SOD is pulled with **`aws s3 cp`** (same as pm-risk). From a Mac, PyCharm
+**hops to `robert@kelai-team-robert`** for S3 + Datastream2 H5, then rsyncs
+`outputs/perturb_tcost/` back.
+
+Caches (on the box under `~/.cache/tcost-engine/`): LSEG cost-price parquet and
+daily combo-cost totals. Re-runs are fast unless SOD/H5 mtimes change; pass
+`--refresh` to rebuild.
+
+Default SOD:
+`s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet`
+
+```text
+pre_pnl_t  = Σ SOD_{t-1} × (close_adj_t / close_adj_{t-1} − 1)
+tcost_t    = 10-mil commish + side×(VWAP−close)×qty   # no half-spread
+post_pnl_t = pre_pnl_t − tcost_t
+ret_t      = pnl_t / ‖SOD_{t-1}‖₁          # Stage C prev_gmv
+TO_t       = ‖SOD_t − SOD_{t-1}‖₁ / ‖SOD_{t-1}‖₁
+```
+
+PyCharm: run config **debug_perturb**. CLI:
+
+```bash
+python debug_perturb.py --start 2021-01-01 --end 2026-10-01
+# on the box: python debug_perturb.py --local ...
+```
+
+## LSEG Datastream2 pulls
+
+Mirrors the AWS research-box ability to read the published Datastream2 H5
+(`kelai-team-robert:/data/robert/lseg/Datastream2/ds2_data.h5`, also
+`s3://kelaidata/data/LSEG/Datastream2/ds2_data.h5`).
+
+Install the optional extra:
+
+```bash
+pip install -e ".[lseg]"
+```
+
+Pull **OHLCV unadjusted + adjusted** for names in the point-in-time **TOP500**
+universe from 2016 onward (default):
+
+```bash
+tcost-engine lseg ohlcv -o data/ohlcv_top500_2016.parquet
+tcost-engine lseg ohlcv --adjustment unadjusted --universe all -o data/ohlcv_all.csv
+```
+
+Pull **TOP500 constituents** from 2016 onward:
+
+```bash
+tcost-engine lseg top500 -o data/top500_constituents_2016.parquet
+```
+
+On the AWS box the newest dated H5 under
+`/data/robert/lseg/Datastream2/` is picked automatically (the undated
+`ds2_data.h5` can lag). Elsewhere pass `--h5` to a local copy or the S3 URL
+(requires AWS credentials; downloads land under `~/.cache/tcost-engine/lseg`).
+
+Published pulls on the box:
+
+```text
+/data/robert/lseg/pulls/top500_constituents_2016.parquet
+/data/robert/lseg/pulls/ohlcv_top500_2016.parquet
+```
+
+| Source | Path |
+| --- | --- |
+| AWS box | `/data/robert/lseg/Datastream2/ds2_data.h5` |
+| S3 prod | `s3://kelaidata/data/LSEG/Datastream2/ds2_data.h5` |
+| Snowflake (upstream) | `KELAI.LSEG_CANARY.BASE_DATA_US_DT`, `KELAI.LSEG_CANARY.TOPN_UNIVERSES_DT` |
+
+Panels: `OPEN`/`HIGH`/`LOW`/`CLOSE`/`VOLUME` and `*_ADJUSTED`, plus `TOP500`.
+
+## Return signals
+
+Gross daily return on adjusted closes, then cross-sectionalized within the
+TOP500 universe:
+
+```text
+ret    = close_lookback(df) / close_lookback(df, window=1)
+ret_cs = rank_pct(ret | top500 == 1)   # within each marketdate, in (0, 1]
+weight = long_short_book(ret_cs)       # enter at today's close; long +1 / short -1
+port   = Σ w(t) × (close(t+1)/close(t) - 1)   # PnL = next day's close-to-close
+       = Σ w(t-1) × (ret(t) - 1)              # series dated on the PnL day
+```
+
+``close_lookback(df, window=w) = close.shift(w)`` within each name (``window``
+defaults to ``0`` = today; ``window=1`` = yesterday).
+
+Signal and weights at ``t`` use full knowledge of ``close(t) / close(t-1)``.
+The book is assumed filled at that close; PnL is the next session's return.
+
+```bash
+pip install -e ".[signals]"
+```
+
+```python
+from tcost_engine.signals import add_ret_signal, portfolio_returns
+
+panel = add_ret_signal(ohlcv_df)       # ret, ret_cs, weight (as of close t)
+port = portfolio_returns(panel)        # daily Series: port_ret (PnL on t+1)
+```
 
 ## Tests
 
@@ -189,4 +337,5 @@ Inspiration drawn from:
   effective cost vs mid; opportunity cost and implementation shortfall as separate
   ideas from the touch spread.
 - **Frazzini, Israel, Moskowitz (2017)** — live-trade calibrated impact curves;
-  ~`$0.005`/share commission as a practical US `commish` baseline.
+  cite ~5 mils/share as a US institutional baseline. This engine’s house rate
+  is **10 mils/share**.

@@ -7,11 +7,23 @@ name = "tcost-engine"
 version = "0.1.0"
 description = "Transaction cost engine for commish (commission + fees) and bid-ask spread. Market impact and residual costs are deferred."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+lseg = [
+    "h5py>=3.10",
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyarrow>=14",
+    "boto3>=1.34",
+]
+signals = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+]
+all = ["tcost-engine[dev,lseg,signals]"]
 
 [project.scripts]
 tcost-engine = "tcost_engine.cli:main"

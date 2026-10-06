@@ -28,36 +28,36 @@ def order(qty: str, notional: str, fills: int = 1, side: Side = Side.BUY) -> Ord
 
 
 def test_per_share_without_minimum() -> None:
-    charge = PerShare("0.005").charge(order("1000", "50020"))
-    assert charge.amount == Decimal("5")
-    assert charge.detail == "0.005 per share × 1000 = 5"
+    charge = PerShare("10").charge(order("1000", "50020"))
+    assert charge.amount == Decimal("1")
+    assert charge.detail == "10 mils × 1000 / 10000 = 1"
 
 
 def test_per_share_minimum_binds() -> None:
-    charge = PerShare("0.005", minimum="1").charge(order("100", "1000"))
+    charge = PerShare("10", minimum="1").charge(order("100", "1000"))
     assert charge.amount == Decimal("1")
-    assert charge.detail == "0.005 per share × 100 = 0.5; order minimum 1 binds"
+    assert charge.detail == "10 mils × 100 / 10000 = 0.1; order minimum 1 binds"
 
 
 def test_per_share_minimum_does_not_bind_and_is_not_mentioned() -> None:
-    charge = PerShare("0.005", minimum="1").charge(order("1000", "50020"))
-    assert charge.amount == Decimal("5")
+    charge = PerShare("10", minimum="1").charge(order("1000", "50020"))
+    assert charge.amount == Decimal("1")
     assert "minimum" not in charge.detail
 
 
 def test_rebate_is_kept_when_minimum_is_zero() -> None:
-    charge = PerShare("-0.002").charge(order("1000", "50020"))
+    charge = PerShare("-20").charge(order("1000", "50020"))
     assert charge.amount == Decimal("-2")
 
 
 def test_positive_minimum_replaces_a_rebate() -> None:
-    charge = PerShare("-0.002", minimum="1").charge(order("1000", "50020"))
+    charge = PerShare("-20", minimum="1").charge(order("1000", "50020"))
     assert charge.amount == Decimal("1")
 
 
 def test_negative_minimum_is_rejected() -> None:
     with pytest.raises(TransactionCostError, match="minimum"):
-        PerShare("0.005", minimum="-1")
+        PerShare("10", minimum="-1")
 
 
 def test_bps_of_notional() -> None:
@@ -82,9 +82,9 @@ def test_no_commission() -> None:
 
 
 def test_composite_sums_parts() -> None:
-    charge = Composite(PerShare("0.005"), BpsOfNotional("1")).charge(order("1000", "50020"))
-    assert charge.amount == Decimal("10.002")
-    assert [part.amount for part in charge.parts] == [Decimal("5"), Decimal("5.002")]
+    charge = Composite(PerShare("10"), BpsOfNotional("1")).charge(order("1000", "50020"))
+    assert charge.amount == Decimal("6.002")
+    assert [part.amount for part in charge.parts] == [Decimal("1"), Decimal("5.002")]
 
 
 def test_empty_composite_is_rejected() -> None:
@@ -94,25 +94,25 @@ def test_empty_composite_is_rejected() -> None:
 
 def test_per_fill_applies_the_minimum_on_each_fill() -> None:
     view = order("100", "1000", fills=2)
-    once = PerShare("0.005", minimum="1").charge(view)
-    each = PerFill(PerShare("0.005", minimum="1")).charge(view)
+    once = PerShare("10", minimum="1").charge(view)
+    each = PerFill(PerShare("10", minimum="1")).charge(view)
     assert once.amount == Decimal("1")
     assert each.amount == Decimal("2")
 
 
 def test_at_least_binds_on_the_combined_schedule() -> None:
-    schedule = AtLeast(Composite(PerShare("0.001"), FlatFee("0.10")), minimum="1")
+    schedule = AtLeast(Composite(PerShare("10"), FlatFee("0.10")), minimum="1")
     charge = schedule.charge(order("100", "1000"))
     assert charge.amount == Decimal("1")
     assert "floor 1 binds" in charge.detail
 
 
 def test_at_least_is_transparent_when_the_floor_does_not_bind() -> None:
-    charge = AtLeast(PerShare("0.005"), minimum="1").charge(order("1000", "50020"))
+    charge = AtLeast(PerShare("10"), minimum="1").charge(order("1000", "50020"))
     assert charge.name == "per_share"
-    assert charge.amount == Decimal("5")
+    assert charge.amount == Decimal("1")
 
 
 def test_float_rate_is_rejected() -> None:
     with pytest.raises(TransactionCostError, match="float"):
-        PerShare(0.005)  # type: ignore[arg-type]
+        PerShare(10.0)  # type: ignore[arg-type]

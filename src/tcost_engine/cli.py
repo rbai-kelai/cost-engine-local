@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 
 from tcost_engine.commission import (
+    DEFAULT_COMMISH_MILS,
     BpsOfNotional,
     CommissionSchedule,
     Composite,
     FlatFee,
-    NoCommission,
     PerShare,
 )
 from tcost_engine.fees import FinraTaf, SecFee, StampDuty
@@ -36,6 +36,7 @@ _COLUMNS = {
     "side",
     "quantity",
     "price",
+    "close",
     "bid",
     "ask",
     "full_spread_bps",
@@ -48,6 +49,22 @@ _COLUMNS = {
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "lseg":
+        try:
+            from tcost_engine.lseg.cli import run_lseg
+
+            return run_lseg(args)
+        except (ImportError, FileNotFoundError, KeyError, OSError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+    if args.command == "cost-combo":
+        from tcost_engine.combo.cli import run_cost_combo
+
+        return run_cost_combo(args)
+    if args.command == "debug-perturb":
+        from tcost_engine.combo.cli_debug import cli_debug_perturb
+
+        return cli_debug_perturb(args)
     try:
         commission = _commish(args)
         model = TransactionCostModel(commish=commission, maker_capture=args.maker_capture)
@@ -70,8 +87,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tcost-engine",
         description=(
-            "Cost trades as commish (commission + fees) plus bid-ask spread. "
-            "Market impact and residual (trend / opportunity) are not modeled."
+            "Cost trades as commish (default 10 mils/share) plus EOD bid-ask "
+            "spread proxy and VWAP vs close slippage. Market impact is not "
+            "modeled. Cost combo SOD panels via cost-combo; pull LSEG OHLCV / "
+            "TOP500 from the AWS-box H5 via lseg."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -83,6 +102,14 @@ def _parser() -> argparse.ArgumentParser:
     blotter = sub.add_parser("blotter", help="Cost fills from a CSV file")
     blotter.add_argument("csv", help="CSV with side, quantity, price, and a spread")
     _add_schedule_args(blotter)
+
+    from tcost_engine.combo.cli import add_cost_combo_parser
+    from tcost_engine.combo.cli_debug import add_debug_perturb_parser
+    from tcost_engine.lseg.cli import add_lseg_parser
+
+    add_cost_combo_parser(sub)
+    add_debug_perturb_parser(sub)
+    add_lseg_parser(sub)
     return parser
 
 
@@ -90,9 +117,13 @@ def _add_fill_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--symbol", default="")
     parser.add_argument("--side", required=True, choices=["buy", "sell"])
     parser.add_argument("--qty", required=True, help="Unsigned quantity")
-    parser.add_argument("--price", required=True, help="Execution price")
-    parser.add_argument("--bid")
-    parser.add_argument("--ask")
+    parser.add_argument("--price", required=True, help="VWAP / execution price")
+    parser.add_argument(
+        "--close",
+        help="Close benchmark for VWAP−close slippage (omit to leave residual at 0)",
+    )
+    parser.add_argument("--bid", help="EOD bid (intraday-spread proxy)")
+    parser.add_argument("--ask", help="EOD ask (intraday-spread proxy)")
     parser.add_argument("--full-spread-bps", help="Quoted width (ask-bid) in bps. Taker pays half.")
     parser.add_argument(
         "--one-way-spread-bps",
@@ -107,11 +138,18 @@ def _add_fill_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_schedule_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--per-share", help="Commission currency amount per share")
+    parser.add_argument(
+        "--mils",
+        default=str(DEFAULT_COMMISH_MILS),
+        help=(
+            "Commission in mils per share (1 mil = $0.0001/share). "
+            f"Charge = mils/10000 × qty. Default {DEFAULT_COMMISH_MILS} mils."
+        ),
+    )
     parser.add_argument(
         "--min-commission",
         default="0",
-        help="Order minimum applied to the per-share schedule. Requires --per-share.",
+        help="Order minimum applied to the mils schedule.",
     )
     parser.add_argument("--flat", help="Flat commission once per order")
     parser.add_argument("--commission-bps", help="Commission in bps of execution notional")
@@ -143,12 +181,9 @@ def _add_schedule_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _commish(args: argparse.Namespace) -> CommissionSchedule:
-    minimum = to_decimal(args.min_commission, name="min commission")
-    parts: list[CommissionSchedule] = []
-    if args.per_share is not None:
-        parts.append(PerShare(args.per_share, minimum=args.min_commission))
-    elif minimum != 0:
-        raise TransactionCostError("--min-commission requires --per-share")
+    parts: list[CommissionSchedule] = [
+        PerShare(args.mils, minimum=args.min_commission),
+    ]
     if args.flat is not None:
         parts.append(FlatFee(args.flat))
     if args.commission_bps is not None:
@@ -164,8 +199,6 @@ def _commish(args: argparse.Namespace) -> CommissionSchedule:
         parts.append(FinraTaf(**taf_kwargs))
     if args.stamp_duty is not None:
         parts.append(StampDuty(args.stamp_duty))
-    if len(parts) == 0:
-        return NoCommission()
     if len(parts) == 1:
         return parts[0]
     return Composite(*parts)
@@ -177,6 +210,7 @@ def _fill_from_args(args: argparse.Namespace) -> Fill:
         side=Side.parse(args.side),
         quantity=args.qty,
         price=args.price,
+        close=args.close,
         spread=_spread_from_values(args.bid, args.ask, args.full_spread_bps, args.one_way_spread_bps),
         liquidity=Liquidity.parse(args.liquidity),
         order_id=args.order_id,
@@ -222,11 +256,13 @@ def _normalize_row(raw: dict[str | None, str | None]) -> dict[str, str]:
 def _fill_from_row(row: dict[str, str]) -> Fill:
     liquidity = row.get("liquidity") or "taker"
     order_id = row.get("order_id") or None
+    close = row.get("close") or None
     return Fill(
         symbol=row.get("symbol", ""),
         side=row.get("side", ""),
         quantity=row.get("quantity", ""),
         price=row.get("price", ""),
+        close=close,
         spread=_spread_from_values(
             row.get("bid") or None,
             row.get("ask") or None,
