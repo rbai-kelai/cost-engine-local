@@ -96,8 +96,6 @@ def yearly_perf_frame(
                 "vol",
                 "maxDD",
                 "daily TO",
-                "trd",
-                "drag",
             ]
         )
         return empty, empty.copy()
@@ -105,26 +103,12 @@ def yearly_perf_frame(
     df = daily.copy()
     df[date_col] = pd.to_datetime(df[date_col]).dt.normalize()
     df["year"] = df[date_col].dt.year
-    if "drag" not in df.columns and gmv_col in df.columns and "tcost" in df.columns:
-        df["drag"] = np.where(df[gmv_col] > 0, df["tcost"] / df[gmv_col], np.nan)
-    if (
-        "trade_pnl_gmv" not in df.columns
-        and gmv_col in df.columns
-        and "intraday_pnl" in df.columns
-    ):
-        df["trade_pnl_gmv"] = np.where(
-            df[gmv_col] > 0, df["intraday_pnl"] / df[gmv_col], np.nan
-        )
 
     num_rows: list[dict] = []
     for year, g in df.groupby("year"):
         m = path_metrics(g[ret_col], periods_per_year=periods_per_year)
         med_gmv = float(np.nanmedian(g[gmv_col])) if gmv_col in g else float("nan")
         mean_to = float(np.nanmean(g[to_col])) if to_col in g else float("nan")
-        mean_drag = float(np.nanmean(g["drag"])) if "drag" in g else float("nan")
-        mean_trd = (
-            float(np.nanmean(g["trade_pnl_gmv"])) if "trade_pnl_gmv" in g else float("nan")
-        )
         num_rows.append(
             {
                 "year": int(year),
@@ -135,8 +119,6 @@ def yearly_perf_frame(
                 "ann_vol": m["ann_vol"],
                 "max_dd": m["max_dd"],
                 "daily_to": mean_to,
-                "trade_pnl_gmv": mean_trd,
-                "drag": mean_drag,
             }
         )
     numeric = pd.DataFrame(num_rows).sort_values("year") if num_rows else pd.DataFrame()
@@ -158,16 +140,10 @@ def yearly_perf_frame(
         "ann_vol": pooled["ann_vol"],
         "max_dd": pooled["max_dd"],
         "daily_to": float(np.nanmean(df[to_col])) if to_col in df else float("nan"),
-        "trade_pnl_gmv": (
-            float(np.nanmean(df["trade_pnl_gmv"])) if "trade_pnl_gmv" in df else float("nan")
-        ),
-        "drag": float(np.nanmean(df["drag"])) if "drag" in df else float("nan"),
     }
 
     def _display_row(r: dict, *, year_as: object) -> dict:
         med = r["median_gmv"]
-        drag = r.get("drag", float("nan"))
-        trd = r.get("trade_pnl_gmv", float("nan"))
         return {
             "Year": year_as,
             "n_days": r["n_days"] if isinstance(year_as, int) else "",
@@ -177,8 +153,6 @@ def yearly_perf_frame(
             "vol": _pct(r["ann_vol"]) if r["ann_vol"] == r["ann_vol"] else "",
             "maxDD": _pct2(r["max_dd"]) if r["max_dd"] == r["max_dd"] else "",
             "daily TO": _to(r["daily_to"]) if r["daily_to"] == r["daily_to"] else "",
-            "trd": f"{10000.0 * trd:.2f}bp" if trd == trd else "",
-            "drag": f"{10000.0 * drag:.2f}bp" if drag == drag else "",
         }
 
     disp_rows = [_display_row(r, year_as=int(r["year"])) for r in num_rows]

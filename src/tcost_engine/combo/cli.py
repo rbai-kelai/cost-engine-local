@@ -15,6 +15,10 @@ from tcost_engine.types import TransactionCostError, dec_str
 
 
 DEFAULT_SOD = (
+    "/data/robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/"
+    "stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet"
+)
+DEFAULT_SOD_S3 = (
     "s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/"
     "stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet"
 )
@@ -109,7 +113,7 @@ def run_cost_combo(args: argparse.Namespace) -> int:
             f"  trade notional      {dec_str(result.trade_notional)}\n"
             f"  commish             {dec_str(result.total_commish)}\n"
             f"  spread              {dec_str(result.total_spread)}\n"
-            f"  residual (slippage) {dec_str(result.total_residual)}\n"
+            f"  intraday slippage   {dec_str(result.total_intraday_slippage)}\n"
             f"  total               {dec_str(result.total_cost)}",
             file=sys.stdout,
         )

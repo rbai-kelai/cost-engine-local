@@ -112,26 +112,31 @@ def test_debug_perturb_post_equals_pre_minus_tcost(monkeypatch, tmp_path: Path) 
         "vol",
         "maxDD",
         "daily TO",
-        "trd",
-        "drag",
     ]
     text = format_debug_perturb(result)
     assert "Pre-tcost" in text
     assert "Post-tcost" in text
     assert "Sharpe" in text
-    assert "trade PnL/GMV /day" in text
-    assert "drag (cost/GMV)/day" in text
-    assert "t-cost total" not in text
+    assert "commish" in text
+    assert "intraday slippage" in text
+    assert "tcost" in text
+    assert "mean" in text
+    assert "median" in text
+    assert "bps/day" in text
+    assert "residual" not in text.lower()
     assert "drag" in result.daily.columns
-    assert "trade_pnl_gmv" in result.daily.columns
-    assert "intraday_alpha" in result.daily.columns
-    assert result.daily["intraday_alpha"].sum() == pytest.approx(
-        result.daily["residual"].sum()
-    )
+    assert "commish_gmv" in result.daily.columns
+    assert "intraday_slippage_gmv" in result.daily.columns
+    assert "intraday_slippage" in result.daily.columns
+    assert "residual" not in result.daily.columns
     day = result.daily.iloc[0]
     if day["gmv"] > 0:
+        assert day["tcost"] == pytest.approx(day["commish"] + day["intraday_slippage"])
         assert day["drag"] == pytest.approx(day["tcost"] / day["gmv"])
-        assert day["trade_pnl_gmv"] == pytest.approx(day["intraday_pnl"] / day["gmv"])
+        assert day["commish_gmv"] == pytest.approx(day["commish"] / day["gmv"])
+        assert day["intraday_slippage_gmv"] == pytest.approx(
+            day["intraday_slippage"] / day["gmv"]
+        )
 
     out = write_perturb_artifacts(result, tmp_path / "perturb")
     assert (out / "README.md").is_file()
@@ -153,15 +158,38 @@ def test_debug_perturb_moc_tcost_equals_commish(monkeypatch, tmp_path: Path) -> 
         path, start=date(2024, 1, 2), end=date(2024, 1, 4), fill="moc"
     )
     assert result.fill == "moc"
-    assert float(result.cost.total_residual) == pytest.approx(0.0)
+    assert float(result.cost.total_intraday_slippage) == pytest.approx(0.0)
     assert result.total_tcost == pytest.approx(float(result.cost.total_commish))
-    assert result.daily["intraday_alpha"].sum() == pytest.approx(0.0)
+    assert result.daily["intraday_slippage"].sum() == pytest.approx(0.0)
     assert result.total_post_pnl == pytest.approx(
         result.total_pre_pnl - float(result.cost.total_commish)
     )
     text = format_debug_perturb(result)
     assert "fill=MOC" in text
-    assert "commish only" in text
+
+
+def test_debug_perturb_tcost_is_commish_plus_slippage(monkeypatch, tmp_path: Path) -> None:
+    """tcost = commish + PnL-signed intraday_slippage."""
+    path = tmp_path / "sod.parquet"
+    sod = _sod()
+    sod.loc[pd.Timestamp("2024-01-03"), 101] = 1500.0
+    sod.to_parquet(path)
+    prices = _prices()
+
+    monkeypatch.setattr(dbg, "pull_cost_prices", lambda *_a, **_k: prices)
+    monkeypatch.setattr(combo_cost, "pull_cost_prices", lambda *_a, **_k: prices)
+
+    result = run_debug_perturb(
+        path, start=date(2024, 1, 2), end=date(2024, 1, 4), fill="vwap"
+    )
+    assert result.daily["tcost"].sum() == pytest.approx(
+        (result.daily["commish"] + result.daily["intraday_slippage"]).sum()
+    )
+    assert result.total_post_pnl == pytest.approx(
+        result.total_pre_pnl - result.total_tcost
+    )
+    text = format_debug_perturb(result)
+    assert "commish + intraday_slippage" in text
 
 
 def test_yearly_perf_has_footer() -> None:

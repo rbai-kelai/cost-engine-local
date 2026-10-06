@@ -119,9 +119,14 @@ def test_vectorized_cost_matches_fill_model() -> None:
     blotter = model.cost_many(fills)
     daily = cost_joined_trades(joined, mils=DEFAULT_COMMISH_MILS)
     assert float(daily["spread"].sum()) == pytest.approx(0.0)
-    assert float(daily["total"].sum()) == pytest.approx(float(blotter.total), rel=1e-9)
     assert float(daily["commish"].sum()) == pytest.approx(float(blotter.commish), rel=1e-9)
-    assert float(daily["residual"].sum()) == pytest.approx(float(blotter.residual), rel=1e-9)
+    # Combo slippage is PnL-signed (= − blotter residual); tcost = commish + slippage.
+    assert float(daily["intraday_slippage"].sum()) == pytest.approx(
+        -float(blotter.residual), rel=1e-9
+    )
+    assert float(daily["total"].sum()) == pytest.approx(
+        float(blotter.commish) + float(daily["intraday_slippage"].sum()), rel=1e-9
+    )
 
 
 def test_load_sod_panel_from_parquet(tmp_path: Path) -> None:
@@ -148,13 +153,15 @@ def test_cost_combo_sod_with_injected_prices(monkeypatch, tmp_path: Path) -> Non
     assert len(result.daily) == 2  # 2024-01-03 and 2024-01-04
     assert result.daily.iloc[0]["date"] == pd.Timestamp("2024-01-03")
     assert result.total_spread == Decimal(0)
-    # costs can be negative if VWAP−close slippage is a benefit
     assert result.total_commish > 0
-    assert result.total_residual > 0
+    # total = commish + PnL-signed intraday slippage
+    assert float(result.total_cost) == pytest.approx(
+        float(result.total_commish) + float(result.total_intraday_slippage), rel=1e-9
+    )
 
 
 def test_moc_fill_is_commish_only() -> None:
-    """MOC exec at close → residual/intraday_alpha = 0; tcost = mils only."""
+    """MOC exec at close → intraday_slippage = 0; tcost = mils only."""
     trades = sod_trades(_sod_panel())
     joined, stats = join_trades_prices(trades, _prices(), fill="moc")
     assert stats.n_fills == 3
@@ -165,13 +172,56 @@ def test_moc_fill_is_commish_only() -> None:
     assert by.loc[(pd.Timestamp("2024-01-04"), 202), "qty"] == pytest.approx(200 / 20.0)
 
     daily = cost_joined_trades(joined, mils=DEFAULT_COMMISH_MILS, fill="moc")
-    assert float(daily["residual"].sum()) == pytest.approx(0.0)
-    assert float(daily["intraday_alpha"].sum()) == pytest.approx(0.0)
+    assert float(daily["intraday_slippage"].sum()) == pytest.approx(0.0)
     assert float(daily["spread"].sum()) == pytest.approx(0.0)
     mils = 10.0 / 10000.0
     qty = 500 / 10.0 + 600 / 10.0 + 200 / 20.0
     assert float(daily["commish"].sum()) == pytest.approx(mils * qty, rel=1e-9)
     assert float(daily["total"].sum()) == pytest.approx(mils * qty, rel=1e-9)
+
+
+def test_intraday_slippage_is_pnl_signed() -> None:
+    """Buy high / sell low vs close → negative intraday slippage."""
+    trades = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-03", "2024-01-03"]),
+            "infocode": [101, 202],
+            "side": ["buy", "sell"],
+            "delta_dollars": [1000.0, -1000.0],
+        }
+    )
+    prices = pd.DataFrame(
+        [
+            {
+                "marketdate": pd.Timestamp("2024-01-03"),
+                "infocode": 101,
+                "bid": 9.9,
+                "ask": 10.1,
+                "vwap": 10.10,  # buy above close
+                "close": 10.0,
+            },
+            {
+                "marketdate": pd.Timestamp("2024-01-03"),
+                "infocode": 202,
+                "bid": 19.9,
+                "ask": 20.1,
+                "vwap": 19.90,  # sell below close
+                "close": 20.0,
+            },
+        ]
+    )
+    joined, _ = join_trades_prices(trades, prices, fill="vwap")
+    daily = cost_joined_trades(joined, mils=0, fill="vwap")
+    # buy: +1×(10−10.10)×(1000/10.10) < 0
+    # sell: −1×(20−19.90)×(1000/19.90) < 0
+    assert float(daily["intraday_slippage"].sum()) < 0
+    buy_qty = 1000 / 10.10
+    sell_qty = 1000 / 19.90
+    expect = 1.0 * (10.0 - 10.10) * buy_qty + (-1.0) * (20.0 - 19.90) * sell_qty
+    assert float(daily["intraday_slippage"].sum()) == pytest.approx(expect, rel=1e-9)
+    assert float(daily["total"].sum()) == pytest.approx(
+        float(daily["commish"].sum()) + expect, rel=1e-9
+    )
 
 
 def test_cost_combo_sod_moc(monkeypatch, tmp_path: Path) -> None:
@@ -185,7 +235,7 @@ def test_cost_combo_sod_moc(monkeypatch, tmp_path: Path) -> None:
         path, start=date(2024, 1, 2), end=date(2024, 1, 4), fill="moc"
     )
     assert result.n_fills == 3
-    assert result.total_residual == Decimal(0)
+    assert result.total_intraday_slippage == Decimal(0)
     assert result.total_spread == Decimal(0)
     assert result.total_cost == result.total_commish
     assert result.total_commish > 0

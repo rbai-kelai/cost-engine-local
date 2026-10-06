@@ -64,9 +64,10 @@ def run_debug_perturb(
     """Compare lag-1 SOD dollar PnL before and after modeled t-costs.
 
     Pre:  ``pnl_t = Σ SOD_{t−1} × (close_adj_t / close_adj_{t−1} − 1)``
-    *fill* ``\"vwap\"``: tcost = mils + VWAP−close (no half-spread)
-    *fill* ``\"moc\"``: tcost = mils only (exec at close)
-    Post: ``pre_pnl_t − tcost_t``
+    Intraday slippage ``Σ side×(close−exec)×qty`` is PnL-signed (buy high / sell
+    low vs close → negative). Under MOC it is 0.
+    Tcost: ``commish + intraday_slippage``.
+    Post: ``pre_pnl_t − tcost_t``.
     Returns / GMV / TO use Stage C ``prev_gmv`` conventions.
     """
     import numpy as np
@@ -84,7 +85,7 @@ def run_debug_perturb(
         "tcost",
         "commish",
         "spread",
-        "residual",
+        "intraday_slippage",
         "post_pnl",
         "post_ret",
         "daily_to",
@@ -171,28 +172,29 @@ def run_debug_perturb(
     tcost = cost.daily.copy()
     if not tcost.empty:
         tcost["date"] = pd.to_datetime(tcost["date"]).dt.normalize()
-        cols = ["date", "tcost", "commish", "spread", "residual", "intraday_alpha"]
         tcost = tcost.rename(columns={"total": "tcost"})
-        if "intraday_alpha" not in tcost.columns:
-            tcost["intraday_alpha"] = tcost["residual"]
+        # Wire: tcost = commish + intraday_slippage (same as cost.daily total).
+        tcost["tcost"] = tcost["commish"] + tcost["intraday_slippage"]
+        cols = ["date", "tcost", "commish", "spread", "intraday_slippage"]
         tcost = tcost[cols]
     else:
         tcost = pd.DataFrame(
-            columns=["date", "tcost", "commish", "spread", "residual", "intraday_alpha"]
+            columns=["date", "tcost", "commish", "spread", "intraday_slippage"]
         )
 
     daily = pre.merge(tcost, on="date", how="left").merge(to, on="date", how="left")
-    for col in ("tcost", "commish", "spread", "residual", "intraday_alpha", "daily_to"):
+    for col in ("tcost", "commish", "spread", "intraday_slippage", "daily_to"):
         daily[col] = daily[col].fillna(0.0)
-    # Mark-to-close PnL of VWAP fills = −Σ side×(VWAP−close)×qty
-    daily["intraday_pnl"] = -daily["intraday_alpha"]
+    daily["intraday_pnl"] = daily["intraday_slippage"]
     daily["post_pnl"] = daily["pre_pnl"] - daily["tcost"]
     daily["post_ret"] = np.where(daily["gmv"] > 0, daily["post_pnl"] / daily["gmv"], np.nan)
-    # Per-day / GMV (not totals / mean GMV)
-    daily["drag"] = np.where(daily["gmv"] > 0, daily["tcost"] / daily["gmv"], np.nan)
-    daily["trade_pnl_gmv"] = np.where(
-        daily["gmv"] > 0, daily["intraday_pnl"] / daily["gmv"], np.nan
+    gmv_pos = daily["gmv"] > 0
+    daily["drag"] = np.where(gmv_pos, daily["tcost"] / daily["gmv"], np.nan)
+    daily["commish_gmv"] = np.where(gmv_pos, daily["commish"] / daily["gmv"], np.nan)
+    daily["intraday_slippage_gmv"] = np.where(
+        gmv_pos, daily["intraday_slippage"] / daily["gmv"], np.nan
     )
+    daily["trade_pnl_gmv"] = daily["intraday_slippage_gmv"]
     daily["cum_pre_pnl"] = daily["pre_pnl"].cumsum()
     daily["cum_post_pnl"] = daily["post_pnl"].cumsum()
 
@@ -226,27 +228,36 @@ def format_debug_perturb(result: DebugPerturbResult) -> str:
         left_title="### Pre-tcost (gross)",
         right_title="### Post-tcost (net of model)",
     )
-    gmv = result.mean_gmv
+    import pandas as pd
+
     drag_mean, drag_med = _daily_frac_stats(result, "drag")
-    trd_mean, trd_med = _daily_frac_stats(result, "trade_pnl_gmv")
+    com_mean, com_med = _daily_frac_stats(result, "commish_gmv")
+    slip_mean, slip_med = _daily_frac_stats(result, "intraday_slippage_gmv")
     pre_sh = result.pre_pooled.get("sharpe", float("nan"))
     post_sh = result.post_pooled.get("sharpe", float("nan"))
     fill = getattr(result, "fill", "vwap") or "vwap"
     if fill == "moc":
-        cost_desc = f"mils={DEFAULT_COMMISH_MILS}, fill=MOC (commish only)"
-        alpha_line = (
-            f"  intraday alpha $    {_intraday_alpha(result):,.2f}"
-            f"  [= 0 under MOC]"
-        )
+        cost_desc = f"mils={DEFAULT_COMMISH_MILS}, fill=MOC"
     else:
         cost_desc = (
             f"mils={DEFAULT_COMMISH_MILS}, fill=VWAP "
-            f"(VWAP−close; no half-spread)"
+            f"(tcost = commish + intraday_slippage)"
         )
-        alpha_line = (
-            f"  intraday alpha $    {_intraday_alpha(result):,.2f}"
-            f"  [= Σ side×(VWAP−close)×qty]"
-        )
+    cost_tbl = pd.DataFrame(
+        {
+            "mean": [
+                _fmt_bps_cell(com_mean),
+                _fmt_bps_cell(slip_mean),
+                _fmt_bps_cell(drag_mean),
+            ],
+            "median": [
+                _fmt_bps_cell(com_med),
+                _fmt_bps_cell(slip_med),
+                _fmt_bps_cell(drag_med),
+            ],
+        },
+        index=["commish", "intraday slippage", "tcost"],
+    )
     lines = [
         "# Perturb: pre-tcost vs post-tcost",
         "",
@@ -256,30 +267,14 @@ def format_debug_perturb(result: DebugPerturbResult) -> str:
         "",
         block,
         "",
-        "## T-cost / trading (per day over GMV)",
+        "## T-cost / trading (bps/day = cost÷GMV)",
         "",
-        f"  days                {len(result.daily):,}",
-        f"  mean GMV            ${gmv / 1e6:.1f}M" if gmv == gmv else "  mean GMV            n/a",
-        f"  pre-tcost PnL       {result.total_pre_pnl:,.2f}",
-        f"  post-tcost PnL      {result.total_post_pnl:,.2f}",
-        f"  Sharpe pre → post   {_fmt_num(pre_sh)} → {_fmt_num(post_sh)}",
-        f"  trade PnL/GMV /day  {_fmt_bps_day(trd_mean)} mean, {_fmt_bps_day(trd_med)} median",
-        f"  drag (cost/GMV)/day {_fmt_bps_day(drag_mean)} mean, {_fmt_bps_day(drag_med)} median",
-        f"  commish $           {float(result.cost.total_commish):,.2f}",
-        f"  residual $          {float(result.cost.total_residual):,.2f}",
-        f"  tcost $             {result.total_tcost:,.2f}",
-        alpha_line,
-        f"  fills / dropped     {result.cost.n_fills:,} / {result.cost.n_dropped:,}",
+        f"Sharpe pre → post   {_fmt_num(pre_sh)} → {_fmt_num(post_sh)}",
+        "",
+        cost_tbl.to_string(),
         "",
     ]
     return "\n".join(lines)
-
-
-def _intraday_alpha(result: DebugPerturbResult) -> float:
-    daily = result.daily
-    if daily is not None and len(daily) and "intraday_alpha" in daily.columns:
-        return float(daily["intraday_alpha"].sum())
-    return float(result.cost.total_residual)
 
 
 def _daily_frac_stats(result: DebugPerturbResult, col: str) -> tuple[float, float]:
@@ -301,6 +296,13 @@ def _fmt_bps_day(x: float) -> str:
     if x != x:
         return "n/a"
     return f"{10000.0 * float(x):.4f} bps/day"
+
+
+def _fmt_bps_cell(x: float) -> str:
+    """Format a daily fraction as bps for a table cell."""
+    if x != x:
+        return "n/a"
+    return f"{10000.0 * float(x):.4f}"
 
 
 def _fmt_num(x: float, nd: int = 2) -> str:
@@ -336,29 +338,28 @@ def write_perturb_artifacts(result: DebugPerturbResult, outdir: str | Path) -> P
 
 
 def result_summary(result: DebugPerturbResult) -> dict[str, object]:
-    alpha = _intraday_alpha(result)
     drag_mean, drag_med = _daily_frac_stats(result, "drag")
-    trd_mean, trd_med = _daily_frac_stats(result, "trade_pnl_gmv")
+    com_mean, com_med = _daily_frac_stats(result, "commish_gmv")
+    slip_mean, slip_med = _daily_frac_stats(result, "intraday_slippage_gmv")
+
+    def _bps(x: float) -> float | None:
+        return None if x != x else 10000.0 * x
+
     return {
         "n_days": int(len(result.daily)),
         "mean_gmv": result.mean_gmv,
         "pre_pnl": result.total_pre_pnl,
         "post_pnl": result.total_post_pnl,
-        "trade_pnl_gmv_mean_daily": trd_mean,
-        "trade_pnl_gmv_median_daily": trd_med,
-        "trade_pnl_bps_per_day": None if trd_mean != trd_mean else 10000.0 * trd_mean,
-        "drag_mean_daily": drag_mean,
-        "drag_median_daily": drag_med,
-        "drag_mean_bps_per_day": None if drag_mean != drag_mean else 10000.0 * drag_mean,
-        "intraday_alpha": alpha,
-        "intraday_pnl": -alpha,
+        "commish_bps_per_day_mean": _bps(com_mean),
+        "commish_bps_per_day_median": _bps(com_med),
+        "intraday_slippage_bps_per_day_mean": _bps(slip_mean),
+        "intraday_slippage_bps_per_day_median": _bps(slip_med),
+        "tcost_bps_per_day_mean": _bps(drag_mean),
+        "tcost_bps_per_day_median": _bps(drag_med),
         "pre_sharpe": result.pre_pooled.get("sharpe"),
         "post_sharpe": result.post_pooled.get("sharpe"),
         "pre_ann_ret": result.pre_pooled.get("ann_ret"),
         "post_ann_ret": result.post_pooled.get("ann_ret"),
-        "commish": float(result.cost.total_commish),
-        "spread": float(result.cost.total_spread),
-        "residual": float(result.cost.total_residual),
         "n_fills": result.cost.n_fills,
         "n_dropped": result.cost.n_dropped,
         "mils": str(DEFAULT_COMMISH_MILS),

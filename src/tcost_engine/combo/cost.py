@@ -26,16 +26,12 @@ class ComboCostResult:
     daily: object  # pandas.DataFrame
     total_commish: Decimal
     total_spread: Decimal
-    total_residual: Decimal
+    total_intraday_slippage: Decimal
     total_cost: Decimal
     trade_notional: Decimal
     n_fills: int
     n_dropped: int
     n_trades: int
-
-    @property
-    def total_slippage(self) -> Decimal:
-        return self.total_residual
 
 
 def cost_combo_sod(
@@ -54,8 +50,9 @@ def cost_combo_sod(
     """Cost DoD trades from a combo SOD dollar panel against LSEG prices.
 
     Trades: ``delta_$ = SOD(t) − SOD(t−1)``.
-    *fill* ``\"vwap\"``: ``qty = |delta_$| / VWAP``, costs = mils + VWAP−close.
-    *fill* ``\"moc\"``: ``qty = |delta_$| / close``, costs = mils only.
+    *fill* ``\"vwap\"``: ``qty = |delta_$| / VWAP``;
+    ``intraday_slippage = side×(close−VWAP)×qty``; ``total = mils + slippage``.
+    *fill* ``\"moc\"``: ``qty = |delta_$| / close``; slippage 0; total = mils.
 
     Pass *panel* / *prices* to skip reloading (used by debug_perturb).
     Daily totals are cached under ``~/.cache/tcost-engine/combo_cost/`` unless
@@ -87,6 +84,8 @@ def cost_combo_sod(
         "mils": str(mils_d),
         "spread": "0",
         "fill": fill_mode,
+        # Bump when combo total / slippage convention changes.
+        "tcost_defn": "commish+intraday_slippage",
     }
     fp = fingerprint(
         meta["sod"],
@@ -96,6 +95,8 @@ def cost_combo_sod(
         meta["start"],
         meta["end"],
         meta["mils"],
+        meta["fill"],
+        meta["tcost_defn"],
     )
     cache_root = default_cache_root(cache_dir) / "combo_cost"
     cache_path = cache_root / f"daily_{fp}.parquet"
@@ -109,7 +110,14 @@ def cost_combo_sod(
                 daily=cached,
                 total_commish=Decimal(str(sidecar.get("total_commish", 0))),
                 total_spread=Decimal(str(sidecar.get("total_spread", 0))),
-                total_residual=Decimal(str(sidecar.get("total_residual", 0))),
+                total_intraday_slippage=Decimal(
+                    str(
+                        sidecar.get(
+                            "total_intraday_slippage",
+                            sidecar.get("total_residual", 0),
+                        )
+                    )
+                ),
                 total_cost=Decimal(str(sidecar.get("total_cost", 0))),
                 trade_notional=Decimal(str(sidecar.get("trade_notional", 0))),
                 n_fills=int(sidecar.get("n_fills", 0)),
@@ -159,7 +167,7 @@ def cost_combo_sod(
             daily=_empty_daily(),
             total_commish=Decimal(0),
             total_spread=Decimal(0),
-            total_residual=Decimal(0),
+            total_intraday_slippage=Decimal(0),
             total_cost=Decimal(0),
             trade_notional=Decimal(0),
             n_fills=0,
@@ -171,14 +179,14 @@ def cost_combo_sod(
     daily = cost_joined_trades(joined, mils=mils, fill=fill_mode)
     total_commish = Decimal(str(float(daily["commish"].sum())))
     total_spread = Decimal(str(float(daily["spread"].sum())))
-    total_residual = Decimal(str(float(daily["residual"].sum())))
+    total_intraday_slippage = Decimal(str(float(daily["intraday_slippage"].sum())))
     total_cost = Decimal(str(float(daily["total"].sum())))
     trade_notional = Decimal(str(float(daily["trade_notional"].sum())))
     result = ComboCostResult(
         daily=daily,
         total_commish=total_commish,
         total_spread=total_spread,
-        total_residual=total_residual,
+        total_intraday_slippage=total_intraday_slippage,
         total_cost=total_cost,
         trade_notional=trade_notional,
         n_fills=stats.n_fills,
@@ -189,7 +197,7 @@ def cost_combo_sod(
         **meta,
         "total_commish": str(total_commish),
         "total_spread": str(total_spread),
-        "total_residual": str(total_residual),
+        "total_intraday_slippage": str(total_intraday_slippage),
         "total_cost": str(total_cost),
         "trade_notional": str(trade_notional),
         "n_fills": stats.n_fills,
@@ -248,9 +256,7 @@ def _empty_daily():
             "date",
             "commish",
             "spread",
-            "residual",
-            "slippage",
-            "intraday_alpha",
+            "intraday_slippage",
             "market_impact",
             "total",
             "trade_notional",
@@ -264,7 +270,7 @@ def _empty_result() -> ComboCostResult:
         daily=_empty_daily(),
         total_commish=Decimal(0),
         total_spread=Decimal(0),
-        total_residual=Decimal(0),
+        total_intraday_slippage=Decimal(0),
         total_cost=Decimal(0),
         trade_notional=Decimal(0),
         n_fills=0,
@@ -284,8 +290,7 @@ def result_summary(result: ComboCostResult) -> dict[str, object]:
         "trade_notional": str(result.trade_notional),
         "commish": str(result.total_commish),
         "spread": str(result.total_spread),
-        "residual": str(result.total_residual),
-        "slippage": str(result.total_slippage),
+        "intraday_slippage": str(result.total_intraday_slippage),
         "total": str(result.total_cost),
         "n_days": int(len(result.daily)),
     }

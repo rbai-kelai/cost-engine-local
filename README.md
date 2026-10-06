@@ -97,15 +97,17 @@ full half-spread.
 
 ## Residual — VWAP vs close slippage
 
-When `Fill.close` is set, residual is the close-benchmark slippage of a VWAP
-fill (also exposed as `OrderCost.slippage` / `BlotterCost.slippage`):
+When `Fill.close` is set, blotter residual is the **cost-signed** close-benchmark
+slippage of a VWAP fill (also `OrderCost.slippage` / `BlotterCost.slippage`):
 
 ```text
-slippage = side × (VWAP − close) × quantity
+slippage = side × (VWAP − close) × quantity   # positive = adverse
 ```
 
-with buy = `+1` and sell = `−1`. That equals **−intraday mark-to-close PnL**
-from the VWAP fill. Omit `close` to leave residual at zero.
+with buy = `+1` and sell = `−1`. Omit `close` to leave residual at zero.
+
+Combo SOD / `debug_perturb` instead report **PnL-signed** `intraday_slippage`
+(`side × (close − VWAP) × qty`) and set `tcost = commish + intraday_slippage`.
 
 ## Deferred term
 
@@ -182,62 +184,64 @@ total 76.3.
 ## Combo SOD t-costs
 
 Cost day-over-day trades from a wide combo SOD dollar panel (DatetimeIndex ×
-INFOCODE) against LSEG Datastream2 `VWAP` / `CLOSE` (VWAP fills — **no**
-separate half-spread):
+INFOCODE) against LSEG Datastream2 `VWAP` / `CLOSE`. Combo fills carry **no**
+half-spread (VWAP already embeds liquidity).
 
 ```text
-delta_$ = SOD(t) − SOD(t−1)
-qty     = |delta_$| / VWAP(t)
-total   = 10-mil commish + side×(VWAP−CLOSE)×qty
+delta_$             = SOD(t) − SOD(t−1)
+qty                 = |delta_$| / exec_px(t)     # VWAP, or close under --fill moc
+intraday_slippage   = side × (close − exec_px) × qty   # PnL-signed
+tcost               = 10-mil commish + intraday_slippage
 ```
 
-Default SOD artifact:
+`side` is `+1` buy / `−1` sell. Buy above close or sell below close → **negative**
+intraday slippage. Under `--fill moc`, exec = close so slippage is 0 and
+tcost = commish only.
 
-`s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet`
+Default SOD (local on `kelai-team-robert`; not overwritten by S3 sync):
+
+`/data/robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet`
 
 ```bash
 pip install -e ".[lseg]"
 
 tcost-engine cost-combo \
-  --sod s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet \
+  --sod /data/robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet \
   --start 2021-01-01 --end 2026-10-01 \
+  --fill vwap \
   -o data/combo_tcost_daily.parquet
 ```
 
-`--mils` defaults to 10. Rows missing vwap/close are dropped (counts printed
-in the summary). Run on the team box where the Datastream2 H5 already lives,
-or pass `--h5` / rely on the S3 fallback.
+`--mils` defaults to 10. `--fill` is `vwap` (default) or `moc`. Rows missing a
+usable price are skipped. Run on the team box (Datastream2 H5), or pass `--h5`.
 
 ### debug_perturb — pre vs post t-cost (mosek-style)
 
-Debugger perturb like `signal-sel-opt`’s Stage C / MOSEK tables: yearly
-`Year / n_days / medGMV / Sharpe / ret / vol / maxDD / daily TO`, side-by-side
-**pre-tcost | post-tcost**, artifacts under `outputs/perturb_tcost/`.
+Stage C–style yearly tables side-by-side (**pre-tcost | post-tcost**), plus a
+commish / intraday slippage / tcost summary in **bps/day** (mean and median).
+Artifacts under `outputs/perturb_tcost/`.
 
-SOD is pulled with **`aws s3 cp`** (same as pm-risk). From a Mac, PyCharm
-**hops to `robert@kelai-team-robert`** for S3 + Datastream2 H5, then rsyncs
-`outputs/perturb_tcost/` back.
+From a Mac, PyCharm run config **debug_perturb** hops to
+`robert@kelai-team-robert` for the H5 + local SOD, then rsyncs
+`outputs/perturb_tcost/` back. On the box, pass `--local`.
 
-Caches (on the box under `~/.cache/tcost-engine/`): LSEG cost-price parquet and
-daily combo-cost totals. Re-runs are fast unless SOD/H5 mtimes change; pass
+Caches under `~/.cache/tcost-engine/` (prices + daily combo-cost). Pass
 `--refresh` to rebuild.
 
-Default SOD:
-`s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet`
-
 ```text
-pre_pnl_t  = Σ SOD_{t-1} × (close_adj_t / close_adj_{t-1} − 1)
-tcost_t    = 10-mil commish + side×(VWAP−close)×qty   # no half-spread
-post_pnl_t = pre_pnl_t − tcost_t
-ret_t      = pnl_t / ‖SOD_{t-1}‖₁          # Stage C prev_gmv
-TO_t       = ‖SOD_t − SOD_{t-1}‖₁ / ‖SOD_{t-1}‖₁
+pre_pnl_t             = Σ SOD_{t-1} × (close_adj_t / close_adj_{t-1} − 1)
+intraday_slippage_t   = Σ side × (close − VWAP) × qty
+tcost_t               = commish + intraday_slippage
+post_pnl_t            = pre_pnl_t − tcost_t
+ret_t                 = pnl_t / ‖SOD_{t-1}‖₁      # Stage C prev_gmv
+TO_t                  = ‖SOD_t − SOD_{t-1}‖₁ / ‖SOD_{t-1}‖₁
 ```
 
-PyCharm: run config **debug_perturb**. CLI:
-
 ```bash
-python debug_perturb.py --start 2021-01-01 --end 2026-10-01
-# on the box: python debug_perturb.py --local ...
+python debug_perturb.py --start 2021-01-01 --end 2026-10-01 --fill vwap
+python debug_perturb.py --fill moc --outdir outputs/perturb_tcost_moc
+# on the box:
+python debug_perturb.py --local --start 2021-01-01 --end 2026-10-01
 ```
 
 ## LSEG Datastream2 pulls

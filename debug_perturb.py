@@ -96,7 +96,6 @@ def _run_on_box(argv: list[str]) -> int:
     if pull.returncode:
         print(f"WARNING: failed to copy {outdir}/ from {BOX_HOST}", flush=True)
         return pull.returncode
-    print(f"copied {outdir}/ from {BOX_HOST}", flush=True)
     return 0
 
 

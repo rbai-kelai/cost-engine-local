@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from tcost_engine.commission import CommissionSchedule
-from tcost_engine.impact import market_impact, residual_cost
+from tcost_engine.impact import market_impact, vwap_close_slippage
 from tcost_engine.spread import spread_cost
 from tcost_engine.types import Charge, Fill, FillEconomics, OrderView, TransactionCostError, cost_bps, to_decimal
 
@@ -250,7 +250,7 @@ class TransactionCostModel:
         for fill in fills:
             spread, spread_detail = spread_cost(fill, maker_capture=capture)
             impact, impact_detail = market_impact()
-            residual, residual_detail = residual_cost(fill)
+            residual, residual_detail = vwap_close_slippage(fill)
             lines.append(
                 FillSpread(
                     fill=fill,

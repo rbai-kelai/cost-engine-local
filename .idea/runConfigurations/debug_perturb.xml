@@ -18,7 +18,7 @@
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/debug_perturb.py" />
-    <option name="PARAMETERS" value="--sod s3://kelai-team-robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet --start 2021-01-01 --end 2026-10-01 --fill moc --outdir outputs/perturb_tcost_moc" />
+    <option name="PARAMETERS" value="--sod /data/robert/stage_c_pinnet_mktbeta_pos_20261005_gto3e-4_to28/stage_c_pinnet_pos_2021_2026_gto3e-4_to28.parquet --start 2021-01-01 --end 2026-10-01 --fill vwap --outdir outputs/perturb_tcost" />
     <option name="SHOW_COMMAND_LINE" value="true" />
     <option name="EMULATE_TERMINAL" value="true" />
     <option name="MODULE_MODE" value="false" />

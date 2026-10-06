@@ -180,8 +180,15 @@ def trades_to_fills(trades, prices) -> tuple[list[Fill], FillBuildStats]:
 def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
     """Vectorized daily t-cost frame from ``join_trades_prices`` output.
 
-    *fill* ``\"vwap\"``: ``mils/10000×qty + side×(exec−close)×qty``.
-    *fill* ``\"moc\"``: exec = close → residual 0, so ``tcost = mils/10000×qty`` only.
+    Intraday slippage is *PnL-signed*:
+
+        intraday_slippage = side × (close − exec) × qty
+
+    (buy@exec>close / sell@exec<close → negative). Combo tcost is
+
+        total = commish + intraday_slippage
+
+    Under MOC, exec = close → slippage 0 and total = mils only.
     """
     import numpy as np
     import pandas as pd
@@ -198,9 +205,7 @@ def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
                 "date",
                 "commish",
                 "spread",
-                "residual",
-                "slippage",
-                "intraday_alpha",
+                "intraday_slippage",
                 "market_impact",
                 "total",
                 "trade_notional",
@@ -217,9 +222,10 @@ def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
     work["commish"] = mils_d * qty
     work["spread"] = 0.0
     if mode == "moc":
-        work["intraday_alpha"] = 0.0
+        work["intraday_slippage"] = 0.0
     else:
-        work["intraday_alpha"] = side * (exec_px - close) * qty
+        # PnL-signed: buy high / sell low vs close → negative slippage.
+        work["intraday_slippage"] = side * (close - exec_px) * qty
     work["trade_notional"] = exec_px * qty
     work["n_fills"] = 1
     daily = (
@@ -227,25 +233,21 @@ def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
         .agg(
             commish=("commish", "sum"),
             spread=("spread", "sum"),
-            intraday_alpha=("intraday_alpha", "sum"),
+            intraday_slippage=("intraday_slippage", "sum"),
             trade_notional=("trade_notional", "sum"),
             n_fills=("n_fills", "sum"),
         )
         .reset_index()
     )
-    daily["residual"] = daily["intraday_alpha"]
-    daily["slippage"] = daily["intraday_alpha"]
     daily["market_impact"] = 0.0
-    daily["total"] = daily["commish"] + daily["spread"] + daily["residual"]
+    daily["total"] = daily["commish"] + daily["spread"] + daily["intraday_slippage"]
     daily["date"] = pd.to_datetime(daily["date"]).dt.normalize()
     return daily[
         [
             "date",
             "commish",
             "spread",
-            "residual",
-            "slippage",
-            "intraday_alpha",
+            "intraday_slippage",
             "market_impact",
             "total",
             "trade_notional",
@@ -268,12 +270,11 @@ def _resolve_path(path: str | Path, *, cache_dir: str | Path | None) -> Path:
         raise ValueError(f"not a valid s3 url: {path}")
 
     # On kelai-team-robert the Stage-C SOD is mirrored under /data/robert/<key>.
+    # Never aws-cp over that mirror — use it as-is when present.
     box_path = Path("/data/robert") / key
     if box_path.is_file():
-        try:
-            return ensure_local_s3(text, box_path, refresh=True, label="SOD parquet")
-        except Exception:
-            return box_path
+        print(f"SOD parquet local: {box_path}", flush=True)
+        return box_path
 
     root = (
         Path(cache_dir)

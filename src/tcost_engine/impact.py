@@ -1,4 +1,4 @@
-"""Market impact and residual (VWAP vs close slippage) trading costs.
+"""Market impact and VWAP vs close slippage trading costs.
 
 Literature decomposition (Northfield / diBartolomeo; Deutsche Bank; Bocconi):
 
@@ -21,16 +21,15 @@ def market_impact() -> tuple[Decimal, str]:
     return Decimal(0), "not modeled (size-dependent price move deferred)"
 
 
-def residual_cost(fill: Fill) -> tuple[Decimal, str]:
-    """VWAP vs close benchmark slippage for one fill.
+def vwap_close_slippage(fill: Fill) -> tuple[Decimal, str]:
+    """VWAP vs close benchmark slippage for one fill (blotter residual).
 
     ``fill.price`` is the VWAP (execution). ``fill.close`` is the close
     benchmark. Positive is a cost to the trader:
 
         slippage = side × (VWAP − close) × quantity
 
-    with buy = +1 and sell = −1. That equals −intraday mark-to-close PnL from
-    a VWAP fill. Omit ``close`` to leave this term at zero.
+    with buy = +1 and sell = −1. Omit ``close`` to leave this term at zero.
     """
     if fill.close is None:
         return (
@@ -47,8 +46,3 @@ def residual_cost(fill: Fill) -> tuple[Decimal, str]:
         f" × {dec_str(quantity)} = {dec_str(amount)}"
     )
     return amount, detail
-
-
-def vwap_close_slippage(fill: Fill) -> tuple[Decimal, str]:
-    """Alias for :func:`residual_cost` — VWAP vs close benchmark slippage."""
-    return residual_cost(fill)
