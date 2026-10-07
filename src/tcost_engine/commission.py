@@ -20,6 +20,9 @@ from typing import Protocol
 
 from tcost_engine.types import Charge, Number, OrderView, TransactionCostError, dec_str, to_decimal
 
+# House fixed broker commission: 10 mils = $0.001 per share (1 mil = $0.0001).
+DEFAULT_COMMISH_MILS = Decimal(10)
+
 
 class CommissionSchedule(Protocol):
     def charge(self, order: OrderView) -> Charge:
@@ -48,29 +51,33 @@ class NoCommission:
 
 @dataclass(frozen=True)
 class PerShare:
-    """max(rate × order quantity, minimum).
+    """max(mils / 10,000 × order quantity, minimum).
 
-    The minimum is a floor on what the trader pays for the order. Leave it at
-    0 for a rebate (a negative rate). A positive minimum replaces a smaller
-    raw amount, including a negative one.
+    One mil is $0.0001 per share, so the currency rate is ``mils / 10000``. The
+    house fixed commission is 10 mils ($0.001/share). The minimum is a floor on
+    what the trader pays for the order. Leave it at 0 for a rebate (negative
+    mils). A positive minimum replaces a smaller raw amount, including a
+    negative one.
     """
 
-    rate: Number
+    mils: Number
     minimum: Number = Decimal(0)
 
     def __post_init__(self) -> None:
-        rate = to_decimal(self.rate, name="per-share rate")
+        mils = to_decimal(self.mils, name="commission mils")
         minimum = to_decimal(self.minimum, name="minimum commission")
         _require_non_negative_minimum(minimum)
-        object.__setattr__(self, "rate", rate)
+        object.__setattr__(self, "mils", mils)
         object.__setattr__(self, "minimum", minimum)
 
     def charge(self, order: OrderView) -> Charge:
-        rate: Decimal = self.rate  # type: ignore[assignment]
+        mils: Decimal = self.mils  # type: ignore[assignment]
         minimum: Decimal = self.minimum  # type: ignore[assignment]
-        raw = rate * order.quantity
+        raw = mils / Decimal(10000) * order.quantity
         amount, bound = _apply_floor(raw, minimum)
-        detail = f"{dec_str(rate)} per share × {dec_str(order.quantity)} = {dec_str(raw)}"
+        detail = (
+            f"{dec_str(mils)} mils × {dec_str(order.quantity)} / 10000 = {dec_str(raw)}"
+        )
         if bound:
             detail += f"; order minimum {dec_str(minimum)} binds"
         return Charge("per_share", amount, detail)

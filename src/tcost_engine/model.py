@@ -1,12 +1,15 @@
-"""Combine commish (commission + fees) and spread for fills and blotters.
+"""Combine commish, spread, and VWAP−close slippage for fills and blotters.
 
 Literature-aligned decomposition (Northfield / diBartolomeo):
 
     total = commish + spread + market_impact + residual
 
-This release costs commish and spread. Market impact and residual are reported
-as zero. The half-spread is the transparent bid-ask cost of taking liquidity;
-it is not implementation shortfall and does not include size-dependent impact.
+This release costs:
+- commish (default 10 mils/share broker commission, plus optional fees)
+- spread from EOD bid/ask as a proxy for intraday quoted width
+- residual as VWAP vs close benchmark slippage
+
+Market impact (size-dependent) stays at zero.
 """
 
 from __future__ import annotations
@@ -16,14 +19,14 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from tcost_engine.commission import CommissionSchedule
-from tcost_engine.impact import market_impact, residual_cost
+from tcost_engine.impact import market_impact, vwap_close_slippage
 from tcost_engine.spread import spread_cost
 from tcost_engine.types import Charge, Fill, FillEconomics, OrderView, TransactionCostError, cost_bps, to_decimal
 
 
 @dataclass(frozen=True)
 class FillSpread:
-    """Spread plus deferred impact and residual terms for a single fill."""
+    """Spread plus impact and residual (VWAP−close slippage) for a single fill."""
 
     fill: Fill
     spread: Decimal
@@ -36,6 +39,15 @@ class FillSpread:
     @property
     def execution_notional(self) -> Decimal:
         return self.fill.execution_notional
+
+    @property
+    def slippage(self) -> Decimal:
+        """VWAP vs close benchmark slippage (alias for residual)."""
+        return self.residual
+
+    @property
+    def slippage_detail(self) -> str:
+        return self.residual_detail
 
 
 @dataclass(frozen=True)
@@ -97,6 +109,11 @@ class OrderCost:
         return sum((line.residual for line in self.fills), Decimal(0))
 
     @property
+    def slippage(self) -> Decimal:
+        """VWAP vs close benchmark slippage (alias for residual)."""
+        return self.residual
+
+    @property
     def total(self) -> Decimal:
         return self.commish_amount + self.spread + self.market_impact + self.residual
 
@@ -146,6 +163,11 @@ class BlotterCost:
         return sum((order.residual for order in self.orders), Decimal(0))
 
     @property
+    def slippage(self) -> Decimal:
+        """VWAP vs close benchmark slippage (alias for residual)."""
+        return self.residual
+
+    @property
     def total(self) -> Decimal:
         return self.commish + self.spread + self.market_impact + self.residual
 
@@ -164,12 +186,11 @@ class BlotterCost:
 class TransactionCostModel:
     """total = commish + spread + market_impact + residual.
 
-    Commish is broker commission plus optional exchange / tax fees. Spread for
-    a taker is the half-spread from the quote (or from an explicit spread in
-    bps). Market impact and residual (trend / opportunity) are fixed at zero.
-
-    The distance between the execution price and the touch is not a cost here;
-    that is where size-dependent impact would go later.
+    Commish is broker commission (house default 10 mils/share) plus optional
+    exchange / tax fees. Spread for a taker is the half-spread from the quote
+    (EOD bid/ask as an intraday-spread proxy, or an explicit spread in bps).
+    Residual is VWAP vs close benchmark slippage when ``Fill.close`` is set.
+    Market impact stays at zero.
 
     ``commission`` is accepted as a synonym for ``commish``.
 
@@ -229,7 +250,7 @@ class TransactionCostModel:
         for fill in fills:
             spread, spread_detail = spread_cost(fill, maker_capture=capture)
             impact, impact_detail = market_impact()
-            residual, residual_detail = residual_cost()
+            residual, residual_detail = vwap_close_slippage(fill)
             lines.append(
                 FillSpread(
                     fill=fill,

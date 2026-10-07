@@ -1,25 +1,19 @@
-"""Market impact and residual trading costs.
+"""Market impact and VWAP vs close slippage trading costs.
 
-Not modeled yet. The literature (Northfield / diBartolomeo; Deutsche Bank;
-Bocconi survey of Almgren, Frazzini–Israel–Moskowitz) treats them as separate
-from the bid-ask spread and from commish (commission + fees):
+Literature decomposition (Northfield / diBartolomeo; Deutsche Bank; Bocconi):
 
     total = commish + spread + market_impact + residual
 
-Commish and spread are computed elsewhere. These two terms return zero so a
-later impact or trend/opportunity model can be plugged in beside them without
-redefining the explicit costs.
-
-Market impact is the price move required to induce the other side of *this*
-trade (temporary and permanent components; often linear and/or square-root
-in size). Residual covers trend cost (other participants' order flow between
-decision and fill) and opportunity cost of delayed or incomplete fills. Neither
-is inferred from the execution price here.
+Commish and spread are computed elsewhere. Residual here is the VWAP-against-
+close benchmark slippage. Market impact (size-dependent price move from *this*
+trade) stays deferred at zero.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
+
+from tcost_engine.types import Fill, Side, dec_str
 
 
 def market_impact() -> tuple[Decimal, str]:
@@ -27,6 +21,28 @@ def market_impact() -> tuple[Decimal, str]:
     return Decimal(0), "not modeled (size-dependent price move deferred)"
 
 
-def residual_cost() -> tuple[Decimal, str]:
-    """Trend / opportunity cost. Always zero until a residual model is added."""
-    return Decimal(0), "not modeled (trend / opportunity cost deferred)"
+def vwap_close_slippage(fill: Fill) -> tuple[Decimal, str]:
+    """VWAP vs close benchmark slippage for one fill (blotter residual).
+
+    ``fill.price`` is the VWAP (execution). ``fill.close`` is the close
+    benchmark. Positive is a cost to the trader:
+
+        slippage = side × (VWAP − close) × quantity
+
+    with buy = +1 and sell = −1. Omit ``close`` to leave this term at zero.
+    """
+    if fill.close is None:
+        return (
+            Decimal(0),
+            "no close benchmark; VWAP vs close slippage omitted",
+        )
+    vwap: Decimal = fill.price  # type: ignore[assignment]
+    close: Decimal = fill.close  # type: ignore[assignment]
+    quantity: Decimal = fill.quantity  # type: ignore[assignment]
+    sign = Decimal(1) if fill.side is Side.BUY else Decimal(-1)
+    amount = sign * (vwap - close) * quantity
+    detail = (
+        f"{fill.side.value} side × (VWAP {dec_str(vwap)} − close {dec_str(close)})"
+        f" × {dec_str(quantity)} = {dec_str(amount)}"
+    )
+    return amount, detail

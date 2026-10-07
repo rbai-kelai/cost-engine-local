@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+outputs/
+data/
+.idea/workspace.xml

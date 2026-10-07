@@ -1,9 +1,9 @@
 """Spread cost from a quote or an explicit spread assumption.
 
 This is the cost of where the fill sits relative to the mid, taken from the
-quoted width. It is not the gap between the execution price and the touch.
-Trading through the quote does not increase this term; that gap is market
-impact, which this model does not include.
+quoted width. With LSEG Datastream2, bid/ask are closing prints used as a
+proxy for that day's intraday spread. It is not the gap between the execution
+price and the touch, and not VWAP vs close (that is residual / slippage).
 """
 
 from __future__ import annotations

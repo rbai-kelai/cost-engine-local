@@ -14,7 +14,7 @@ def format_report(blotter: BlotterCost) -> str:
         "tcost-engine report",
         "Decomposition: commish + spread + market impact + residual",
         "Market impact: not modeled (0)",
-        "Residual (trend / opportunity): not modeled (0)",
+        "Residual: VWAP vs close benchmark slippage",
         "",
     ]
     if len(blotter.orders) == 0:
@@ -31,13 +31,14 @@ def blotter_to_dict(blotter: BlotterCost) -> dict[str, Any]:
     return {
         "decomposition": "commish + spread + market_impact + residual",
         "market_impact": "not_modeled",
-        "residual": "not_modeled",
+        "residual": "vwap_vs_close",
         "execution_notional": dec_str(blotter.execution_notional),
         "commish": dec_str(blotter.commish),
         "commission": dec_str(blotter.commission),
         "spread": dec_str(blotter.spread),
         "market_impact_cost": dec_str(blotter.market_impact),
         "residual_cost": dec_str(blotter.residual),
+        "slippage": dec_str(blotter.slippage),
         "total": dec_str(blotter.total),
         "total_bps": dec_str(blotter.total_bps),
         "orders": [_order_to_dict(order) for order in blotter.orders],
@@ -59,15 +60,21 @@ def _format_order(order: OrderCost) -> list[str]:
     for index, line in enumerate(order.fills, start=1):
         fill = line.fill
         prefix = f"    fill {index}  " if len(order.fills) > 1 else "    "
+        close_txt = (
+            f"  close {dec_str(fill.close)}" if fill.close is not None else ""
+        )
         lines.append(
-            f"{prefix}qty {dec_str(fill.quantity)} @ {dec_str(fill.price)}"
+            f"{prefix}qty {dec_str(fill.quantity)} @ VWAP {dec_str(fill.price)}"
+            f"{close_txt}"
             f"  {fill.liquidity.value}  {dec_str(line.spread)}"
         )
         lines.append(f"      {line.spread_detail}")
     lines.append(f"  market impact       {dec_str(order.market_impact)}")
     lines.append(f"      {order.fills[0].market_impact_detail}")
-    lines.append(f"  residual            {dec_str(order.residual)}")
-    lines.append(f"      {order.fills[0].residual_detail}")
+    lines.append(f"  residual (slippage) {dec_str(order.residual)}")
+    for index, line in enumerate(order.fills, start=1):
+        prefix = f"    fill {index}  " if len(order.fills) > 1 else "    "
+        lines.append(f"{prefix}{line.residual_detail}")
     lines.append(
         f"  total               {dec_str(order.total)}"
         f"  ({_bps(order.total, order.execution_notional)} bps of execution notional)"
@@ -92,7 +99,8 @@ def _format_totals(title: str, blotter: BlotterCost) -> list[str]:
         f"  commish             {dec_str(blotter.commish)}  ({_bps(blotter.commish, notional)} bps)",
         f"  spread              {dec_str(blotter.spread)}  ({_bps(blotter.spread, notional)} bps)",
         f"  market impact       {dec_str(blotter.market_impact)}  (not modeled)",
-        f"  residual            {dec_str(blotter.residual)}  (not modeled)",
+        f"  residual (slippage) {dec_str(blotter.residual)}"
+        f"  ({_bps(blotter.residual, notional)} bps)",
         f"  total               {dec_str(blotter.total)}  ({_bps(blotter.total, notional)} bps)",
     ]
 
@@ -118,13 +126,16 @@ def _order_to_dict(order: OrderCost) -> dict[str, Any]:
         "market_impact": dec_str(order.market_impact),
         "market_impact_detail": "not modeled",
         "residual": dec_str(order.residual),
-        "residual_detail": "not modeled",
+        "slippage": dec_str(order.slippage),
+        "residual_detail": order.fills[0].residual_detail if len(order.fills) == 1 else "see fills",
         "total": dec_str(order.total),
         "total_bps": dec_str(order.total_bps),
         "fills": [
             {
                 "quantity": dec_str(line.fill.quantity),
                 "price": dec_str(line.fill.price),
+                "vwap": dec_str(line.fill.price),
+                "close": dec_str(line.fill.close) if line.fill.close is not None else None,
                 "liquidity": line.fill.liquidity.value,
                 "execution_notional": dec_str(line.execution_notional),
                 "commish_allocated": dec_str(order.commish_allocated[index]),
@@ -133,6 +144,8 @@ def _order_to_dict(order: OrderCost) -> dict[str, Any]:
                 "spread_detail": line.spread_detail,
                 "market_impact": dec_str(line.market_impact),
                 "residual": dec_str(line.residual),
+                "slippage": dec_str(line.slippage),
+                "residual_detail": line.residual_detail,
                 "total": dec_str(order.fill_total(index)),
             }
             for index, line in enumerate(order.fills)
