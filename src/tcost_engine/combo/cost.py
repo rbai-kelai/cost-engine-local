@@ -32,6 +32,7 @@ class ComboCostResult:
     n_fills: int
     n_dropped: int
     n_trades: int
+    mils: Decimal = DEFAULT_COMMISH_MILS
 
 
 def cost_combo_sod(
@@ -46,13 +47,18 @@ def cost_combo_sod(
     prices=None,
     refresh: bool = False,
     fill: str = "vwap",
+    include_spread: bool = True,
 ) -> ComboCostResult:
     """Cost DoD trades from a combo SOD dollar panel against LSEG prices.
 
-    Trades: ``delta_$ = SOD(t) − SOD(t−1)``.
-    *fill* ``\"vwap\"``: ``qty = |delta_$| / VWAP``;
-    ``intraday_slippage = side×(close−VWAP)×qty``; ``total = mils + slippage``.
-    *fill* ``\"moc\"``: ``qty = |delta_$| / close``; slippage 0; total = mils.
+    Trades (share-based): ``Δn_adj = SOD_t/close_adj_t − SOD_{t−1}/close_adj_{t−1}``,
+    ``δ$ = Δn_adj×close_adj_t``, ``qty = |δ$|/close_t``.
+    *fill* ``\"vwap\"``: ``intraday_slippage = side×(VWAP_t−close_t)×qty``
+    (cost-signed vs same-day close); costs dated on ``t``. Half-spread
+    applies when *include_spread* (default True).
+    *fill* ``\"moc\"``: fill at close → commission only (slippage 0, spread 0).
+    *include_spread* (default True): taker half-spread
+    ``((ask−bid)/2)×qty`` from LSEG EOD bid/ask (VWAP only; ignored for MOC).
 
     Pass *panel* / *prices* to skip reloading (used by debug_perturb).
     Daily totals are cached under ``~/.cache/tcost-engine/combo_cost/`` unless
@@ -74,6 +80,9 @@ def cost_combo_sod(
     sod_key, sod_mtime = file_stamp(sod_resolved)
     h5_key, h5_mtime = _h5_cache_stamp(h5_path, cache_dir=cache_dir)
     mils_d = to_decimal(mils, name="mils")
+    # MOC is always commission-only; spread flag only affects VWAP.
+    effective_spread = bool(include_spread) and fill_mode != "moc"
+    spread_key = "half_bidask" if effective_spread else "0"
     meta = {
         "sod": sod_key,
         "sod_mtime": sod_mtime,
@@ -82,10 +91,10 @@ def cost_combo_sod(
         "start": "" if start is None else start.isoformat(),
         "end": "" if end is None else end.isoformat(),
         "mils": str(mils_d),
-        "spread": "0",
+        "spread": spread_key,
         "fill": fill_mode,
         # Bump when combo total / slippage convention changes.
-        "tcost_defn": "commish+intraday_slippage",
+        "tcost_defn": "adj_dn_moc_commish_vwap_half_spread",
     }
     fp = fingerprint(
         meta["sod"],
@@ -95,6 +104,7 @@ def cost_combo_sod(
         meta["start"],
         meta["end"],
         meta["mils"],
+        meta["spread"],
         meta["fill"],
         meta["tcost_defn"],
     )
@@ -123,6 +133,7 @@ def cost_combo_sod(
                 n_fills=int(sidecar.get("n_fills", 0)),
                 n_dropped=int(sidecar.get("n_dropped", 0)),
                 n_trades=int(sidecar.get("n_trades", 0)),
+                mils=to_decimal(sidecar.get("mils", mils_d), name="mils"),
             )
 
     if panel is None:
@@ -132,37 +143,30 @@ def cost_combo_sod(
         if end is not None:
             panel = panel.loc[panel.index <= pd.Timestamp(end)]
     if panel.empty:
-        return _empty_result()
-
-    print(f"building DoD trades from SOD {panel.shape} …", flush=True)
-    trades = sod_trades(panel)
-    if trades.empty:
-        return _empty_result()
-    print(f"  trades={len(trades):,}", flush=True)
+        return _empty_result(mils=mils_d)
 
     if prices is None:
-        trade_start = trades["date"].min().date()
-        trade_end = trades["date"].max().date()
+        price_start = panel.index.min().date()
+        price_end = panel.index.max().date()
         print(
-            f"pulling LSEG BID/ASK/VWAP/CLOSE {trade_start}→{trade_end} …",
+            f"pulling LSEG BID/ASK/VWAP/CLOSE {price_start}→{price_end} …",
             flush=True,
         )
         prices = pull_cost_prices(
             h5_path,
-            start=trade_start,
-            end=trade_end,
+            start=price_start,
+            end=price_end,
             infocodes=panel.columns.tolist(),
             cache_dir=cache_dir,
             refresh=refresh,
         )
         print(f"  price rows={len(prices):,}", flush=True)
 
-    print(f"joining trades → prices (vectorized, fill={fill_mode}) …", flush=True)
-    joined, stats = join_trades_prices(trades, prices, fill=fill_mode)
-    print(f"  fills={stats.n_fills:,}", flush=True)
-    if stats.n_dropped:
-        print(f"  dropped={stats.n_dropped:,} (no price)", flush=True)
-    if stats.n_fills == 0:
+    print(f"building share-based DoD trades from SOD {panel.shape} …", flush=True)
+    trades, sod_stats = sod_trades(panel, prices)
+    if sod_stats.n_dropped:
+        print(f"  sod dropped={sod_stats.n_dropped:,} (missing adj/close)", flush=True)
+    if trades.empty:
         return ComboCostResult(
             daily=_empty_daily(),
             total_commish=Decimal(0),
@@ -171,12 +175,38 @@ def cost_combo_sod(
             total_cost=Decimal(0),
             trade_notional=Decimal(0),
             n_fills=0,
-            n_dropped=stats.n_dropped,
-            n_trades=stats.n_trades,
+            n_dropped=sod_stats.n_dropped,
+            n_trades=sod_stats.n_trades,
+            mils=mils_d,
+        )
+    print(f"  trades={len(trades):,}", flush=True)
+
+    print(f"joining trades → prices (vectorized, fill={fill_mode}) …", flush=True)
+    joined, join_stats = join_trades_prices(trades, prices, fill=fill_mode)
+    n_fills = join_stats.n_fills
+    n_dropped = sod_stats.n_dropped + join_stats.n_dropped
+    n_trades = n_fills + n_dropped
+    print(f"  fills={n_fills:,}", flush=True)
+    if n_dropped:
+        print(f"  dropped={n_dropped:,} (no price)", flush=True)
+    if n_fills == 0:
+        return ComboCostResult(
+            daily=_empty_daily(),
+            total_commish=Decimal(0),
+            total_spread=Decimal(0),
+            total_intraday_slippage=Decimal(0),
+            total_cost=Decimal(0),
+            trade_notional=Decimal(0),
+            n_fills=0,
+            n_dropped=n_dropped,
+            n_trades=n_trades,
+            mils=mils_d,
         )
 
     print("aggregating daily t-costs …", flush=True)
-    daily = cost_joined_trades(joined, mils=mils, fill=fill_mode)
+    daily = cost_joined_trades(
+        joined, mils=mils, fill=fill_mode, include_spread=effective_spread
+    )
     total_commish = Decimal(str(float(daily["commish"].sum())))
     total_spread = Decimal(str(float(daily["spread"].sum())))
     total_intraday_slippage = Decimal(str(float(daily["intraday_slippage"].sum())))
@@ -189,9 +219,10 @@ def cost_combo_sod(
         total_intraday_slippage=total_intraday_slippage,
         total_cost=total_cost,
         trade_notional=trade_notional,
-        n_fills=stats.n_fills,
-        n_dropped=stats.n_dropped,
-        n_trades=stats.n_trades,
+        n_fills=n_fills,
+        n_dropped=n_dropped,
+        n_trades=n_trades,
+        mils=mils_d,
     )
     sidecar = {
         **meta,
@@ -200,9 +231,9 @@ def cost_combo_sod(
         "total_intraday_slippage": str(total_intraday_slippage),
         "total_cost": str(total_cost),
         "trade_notional": str(trade_notional),
-        "n_fills": stats.n_fills,
-        "n_dropped": stats.n_dropped,
-        "n_trades": stats.n_trades,
+        "n_fills": n_fills,
+        "n_dropped": n_dropped,
+        "n_trades": n_trades,
     }
     try:
         write_parquet_cache(daily, cache_path, meta_path=meta_path, meta=sidecar)
@@ -265,7 +296,7 @@ def _empty_daily():
     )
 
 
-def _empty_result() -> ComboCostResult:
+def _empty_result(*, mils: Decimal | None = None) -> ComboCostResult:
     return ComboCostResult(
         daily=_empty_daily(),
         total_commish=Decimal(0),
@@ -276,14 +307,14 @@ def _empty_result() -> ComboCostResult:
         n_fills=0,
         n_dropped=0,
         n_trades=0,
+        mils=mils if mils is not None else to_decimal(DEFAULT_COMMISH_MILS, name="mils"),
     )
 
 
 def result_summary(result: ComboCostResult) -> dict[str, object]:
     """JSON-serializable totals for CLI ``--json``."""
-    mils = to_decimal(DEFAULT_COMMISH_MILS, name="mils")
     return {
-        "mils": str(mils),
+        "mils": str(result.mils),
         "n_trades": result.n_trades,
         "n_fills": result.n_fills,
         "n_dropped": result.n_dropped,

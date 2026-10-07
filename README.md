@@ -106,8 +106,12 @@ slippage = side × (VWAP − close) × quantity   # positive = adverse
 
 with buy = `+1` and sell = `−1`. Omit `close` to leave residual at zero.
 
-Combo SOD / `debug_perturb` instead report **PnL-signed** `intraday_slippage`
-(`side × (close − VWAP) × qty`) and set `tcost = commish + intraday_slippage`.
+Combo SOD / `debug_perturb`: paper holds `SOD_{t−1}` through close `t` then
+switches for free; reality works the rebalance all day at VWAP. Trade size uses
+adjusted shares for Δn, then converts to real shares via unadjusted close:
+`δ$ = Δn_adj×close_adj`, `qty = |δ$|/close_t`. Gap vs paper is same-day VWAP vs
+close on traded names only: `tcost_t = commish + side×(VWAP_t−close_t)×qty`,
+dated on `t`. `post_t = pre_t − tcost_t`.
 
 ## Deferred term
 
@@ -184,19 +188,26 @@ total 76.3.
 ## Combo SOD t-costs
 
 Cost day-over-day trades from a wide combo SOD dollar panel (DatetimeIndex ×
-INFOCODE) against LSEG Datastream2 `VWAP` / `CLOSE`. Combo fills carry **no**
-half-spread (VWAP already embeds liquidity).
+INFOCODE) against LSEG Datastream2 `BID` / `ASK` / `VWAP` / `CLOSE`. Combo fills
+charge a **taker half-spread** from EOD bid/ask (same proxy as the blotter
+model) on top of VWAP−close slippage — assuming VWAP alone is an optimistic
+fill. Pass `--no-spread` to omit it.
 
 ```text
-delta_$             = SOD(t) − SOD(t−1)
-qty                 = |delta_$| / exec_px(t)     # VWAP, or close under --fill moc
-intraday_slippage   = side × (close − exec_px) × qty   # PnL-signed
-tcost               = 10-mil commish + intraday_slippage
+Δn_adj_t            = SOD_t / close_adj_t − SOD_{t−1} / close_adj_{t−1}
+δ$_t                = Δn_adj_t × close_adj_t              # = SOD_t − SOD_{t−1}·(1+r_t)
+qty                 = |δ$_t| / close_t                    # real shares on day t
+commish             = (mils / 10_000) × qty               # ≥ 0
+spread              = ((ask_t − bid_t) / 2) × qty         # EOD half-spread proxy
+intraday_slippage   = side × (VWAP_t − close_t) × qty     # traded names only
+tcost               = commish + spread + intraday_slippage  # dated on t
+post_t              = pre_t − tcost_t
 ```
 
-`side` is `+1` buy / `−1` sell. Buy above close or sell below close → **negative**
-intraday slippage. Under `--fill moc`, exec = close so slippage is 0 and
-tcost = commish only.
+Raw dollar `SOD_t − SOD_{t−1}` is **not** used for trade size. `close_adj` sizes
+the rebalance; unadjusted `close`/`VWAP` convert to real shares and slippage.
+Under `--fill moc`, fill is at close: **commission only** (slippage 0,
+spread 0). `--no-spread` only affects VWAP fills.
 
 Default SOD (local on `kelai-team-robert`; not overwritten by S3 sync):
 
@@ -217,9 +228,18 @@ usable price are skipped. Run on the team box (Datastream2 H5), or pass `--h5`.
 
 ### debug_perturb — pre vs post t-cost (mosek-style)
 
-Stage C–style yearly tables side-by-side (**pre-tcost | post-tcost**), plus a
-commish / intraday slippage / tcost summary in **bps/day** (mean and median).
-Artifacts under `outputs/perturb_tcost/`.
+One run produces **two** after-tcost fill scenarios (shared SOD / prices /
+fills), each with Stage C–style yearly tables (**pre-tcost | post-tcost**)
+and a t-cost summary in **bps/day**:
+
+| Header | Formula |
+|--------|---------|
+| **MOC fill** | fill at close; `tcost = commish` (no slippage, no spread) |
+| **VWAP fill** | `tcost = commish + half-spread + side×(VWAP−close)×qty` |
+
+`--no-spread` omits half-spread on the VWAP scenario only. Artifacts under
+`outputs/perturb_tcost/` (`moc_post_tcost_yearly.csv`,
+`vwap_post_tcost_yearly.csv`, shared `pre_tcost_yearly.csv`, daily series).
 
 From a Mac, PyCharm run config **debug_perturb** hops to
 `robert@kelai-team-robert` for the H5 + local SOD, then rsyncs
@@ -229,17 +249,21 @@ Caches under `~/.cache/tcost-engine/` (prices + daily combo-cost). Pass
 `--refresh` to rebuild.
 
 ```text
-pre_pnl_t             = Σ SOD_{t-1} × (close_adj_t / close_adj_{t-1} − 1)
-intraday_slippage_t   = Σ side × (close − VWAP) × qty
-tcost_t               = commish + intraday_slippage
+pre_pnl_t             = Σ SOD_{t-1} × (close_adj_t / close_adj_{t-1} − 1)  # paper
+δ$_t                  = SOD_t − SOD_{t-1}×(1+r_t)                  # rebalance $
+qty_t                 = |δ$_t| / close_t
+# MOC fill
+moc_tcost_t           = commish_t
+# VWAP fill
+spread_t              = ((ask_t − bid_t) / 2) × qty_t
+vwap_tcost_t          = commish_t + spread_t + side×(VWAP_t − close_t)×qty_t
 post_pnl_t            = pre_pnl_t − tcost_t
-ret_t                 = pnl_t / ‖SOD_{t-1}‖₁      # Stage C prev_gmv
-TO_t                  = ‖SOD_t − SOD_{t-1}‖₁ / ‖SOD_{t-1}‖₁
+ret_t                 = pnl_t / ‖SOD_{t-1}‖₁                       # Stage C prev_gmv
+TO_t                  = Σ|δ$_t| / ‖SOD_{t-1}‖₁                     # excl. price drift
 ```
 
 ```bash
-python debug_perturb.py --start 2021-01-01 --end 2026-10-01 --fill vwap
-python debug_perturb.py --fill moc --outdir outputs/perturb_tcost_moc
+python debug_perturb.py --start 2021-01-01 --end 2026-10-01
 # on the box:
 python debug_perturb.py --local --start 2021-01-01 --end 2026-10-01
 ```
