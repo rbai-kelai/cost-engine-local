@@ -69,7 +69,15 @@ def add_cost_combo_parser(sub: argparse._SubParsersAction) -> None:
         "--fill",
         choices=("vwap", "moc"),
         default="vwap",
-        help="Execution assumption: vwap (mils+VWAP−close) or moc (mils only)",
+        help=(
+            "Execution assumption: vwap (mils+half-spread+VWAP−close) or "
+            "moc (mils only; fill at close)"
+        ),
+    )
+    parser.add_argument(
+        "--no-spread",
+        action="store_true",
+        help="Omit LSEG EOD half-spread on VWAP fills (ignored for MOC)",
     )
     parser.add_argument(
         "--json",
@@ -90,6 +98,7 @@ def run_cost_combo(args: argparse.Namespace) -> int:
             mils=args.mils,
             cache_dir=args.cache_dir,
             fill=str(args.fill),
+            include_spread=not bool(getattr(args, "no_spread", False)),
         )
     except (TransactionCostError, FileNotFoundError, ImportError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

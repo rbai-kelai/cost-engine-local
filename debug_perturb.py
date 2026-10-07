@@ -12,8 +12,9 @@ PyCharm:
 
 CLI:
   python debug_perturb.py --start 2021-01-01 --end 2026-10-01
-  python debug_perturb.py --fill moc --outdir outputs/perturb_tcost_moc
   python debug_perturb.py --local   # on kelai-team-robert
+  # Always reports both: MOC fill (commish only) and VWAP fill
+  # (mils + half-spread + VWAP−close).
 """
 
 from __future__ import annotations

@@ -44,46 +44,130 @@ def load_sod_panel(path: str | Path, *, cache_dir: str | Path | None = None):
     return df.astype("float64")
 
 
-def sod_trades(panel):
-    """Day-over-day signed dollar trades from a wide SOD panel.
+def rebalance_dollars(panel, prices):
+    """Wide adjusted-share Δn and rebalance dollars δ$ = Δn_adj × close_adj_t.
 
-    ``delta_$ = SOD(t) − SOD(t−1)``. The first date has no prior book and yields
-    no trades. Returns a long DataFrame: ``date``, ``infocode``, ``side``,
-    ``delta_dollars``.
+    SOD stores unheld names as **0** (not NaN). Zero dollars → zero shares even
+    when ``close_adj`` is missing, so entries after a no-price prior day still
+    produce Δn when day-t prices exist::
+
+        shares = 0 if SOD == 0 else SOD / close_adj
+        Δn_adj_t = shares_t − shares_{t−1}
+        δ$_t     = Δn_adj_t × close_adj_t
+
+    Returns ``(delta_shares_adj, delta_dollars)`` wide frames for
+    ``panel.iloc[1:]`` (first SOD day has no prior book).
     """
     import numpy as np
     import pandas as pd
 
-    if panel.empty or len(panel.index) < 2:
-        return pd.DataFrame(columns=["date", "infocode", "side", "delta_dollars"])
+    if panel is None or panel.empty or len(panel.index) < 2:
+        empty = pd.DataFrame(index=pd.DatetimeIndex([], name="date"))
+        return empty, empty
+    if prices is None or len(prices) == 0:
+        raise ValueError("rebalance_dollars requires a prices frame (for close_adj)")
 
-    prev = panel.shift(1)
-    delta = panel - prev
-    delta = delta.iloc[1:]
-    stacked = delta.stack(future_stack=True)
-    stacked = stacked.replace([np.inf, -np.inf], np.nan).dropna()
-    stacked = stacked[stacked != 0]
-    if stacked.empty:
-        return pd.DataFrame(columns=["date", "infocode", "side", "delta_dollars"])
+    px = prices.copy()
+    px["marketdate"] = pd.to_datetime(px["marketdate"]).dt.normalize()
+    adj_col = "close_adjusted" if "close_adjusted" in px.columns else "close"
+    if adj_col not in px.columns:
+        raise KeyError("prices need 'close_adjusted' or 'close'")
 
-    out = stacked.reset_index()
-    out.columns = ["date", "infocode", "delta_dollars"]
+    adj = (
+        px.pivot_table(
+            index="marketdate", columns="infocode", values=adj_col, aggfunc="last"
+        )
+        .sort_index()
+    )
+    ids = [int(c) for c in panel.columns]
+    sod = panel.sort_index().copy()
+    sod.columns = ids
+    adj_w = adj.reindex(columns=ids).reindex(sod.index)
+    sod_arr = sod.to_numpy(dtype=np.float64)
+    adj_arr = adj_w.to_numpy(dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # Unheld (SOD==0) → 0 shares; do not propagate NaN from missing adj.
+        shares_arr = np.where(sod_arr == 0, 0.0, sod_arr / adj_arr)
+    shares = pd.DataFrame(shares_arr, index=sod.index, columns=ids)
+    dn = (shares - shares.shift(1)).iloc[1:]
+    d_dollars = dn * adj_w.reindex(dn.index)
+    return dn, d_dollars
+
+
+def sod_trades(panel, prices) -> tuple[object, FillBuildStats]:
+    """Share-based day-over-day trades from a dollar SOD panel + LSEG closes.
+
+    Uses ``rebalance_dollars`` (δ$ = Δn_adj × close_adj_t). Real shares for
+    costing: ``qty = |δ$| / close_t`` in ``join_trades_prices``.
+
+    Name-days with a **held** book (nonzero SOD on t or t−1) but missing
+    prices are counted as dropped. Never-held zeros are not trades and not
+    drops. Returns ``(trades, FillBuildStats)``.
+    """
+    import numpy as np
+    import pandas as pd
+
+    empty = pd.DataFrame(
+        columns=["date", "infocode", "side", "delta_shares_adj", "delta_dollars"]
+    )
+    if panel is None or panel.empty or len(panel.index) < 2:
+        return empty, FillBuildStats(n_trades=0, n_fills=0, n_dropped=0)
+    if prices is None or len(prices) == 0:
+        raise ValueError("sod_trades requires a prices frame (for close_adj)")
+
+    sod = panel.sort_index().copy()
+    sod.columns = [int(c) for c in sod.columns]
+    dn, d_dollars = rebalance_dollars(sod, prices)
+
+    sod_t = sod.iloc[1:]
+    sod_prev = sod.shift(1).iloc[1:]
+    # Unheld is 0, not NaN — only nonzero SOD counts as a book.
+    has_book = (sod_t.fillna(0.0) != 0) | (sod_prev.fillna(0.0) != 0)
+    missing_px = has_book & dn.isna()
+    trade_ok = dn.notna() & (dn != 0)
+
+    n_dropped = int(missing_px.to_numpy().sum())
+    n_fills = int(trade_ok.to_numpy().sum())
+
+    long_dn = dn.where(trade_ok).stack(future_stack=True).rename("delta_shares_adj")
+    long_dd = d_dollars.where(trade_ok).stack(future_stack=True).rename("delta_dollars")
+    out = pd.concat([long_dn, long_dd], axis=1).dropna(how="any").reset_index()
+    out = out.rename(columns={out.columns[0]: "date", out.columns[1]: "infocode"})
+    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["delta_dollars"])
+    out = out[out["delta_dollars"] != 0]
+    if out.empty:
+        return empty, FillBuildStats(
+            n_trades=n_dropped, n_fills=0, n_dropped=n_dropped
+        )
+
     out["infocode"] = out["infocode"].astype(np.int64)
     out["side"] = np.where(out["delta_dollars"] > 0, "buy", "sell")
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
-    return out[["date", "infocode", "side", "delta_dollars"]]
+    out["delta_dollars"] = out["delta_dollars"].astype(np.float64)
+    out["delta_shares_adj"] = out["delta_shares_adj"].astype(np.float64)
+    n_fills = int(len(out))
+    n_trades = n_fills + n_dropped
+    return (
+        out[["date", "infocode", "side", "delta_shares_adj", "delta_dollars"]],
+        FillBuildStats(n_trades=n_trades, n_fills=n_fills, n_dropped=n_dropped),
+    )
 
 
 def join_trades_prices(trades, prices, *, fill: str = "vwap"):
     """Merge DoD trades to LSEG prices; drop rows missing usable prices.
 
-    *fill*:
-      - ``\"vwap\"``: execute at VWAP (fallback to close if VWAP missing)
-      - ``\"moc\"``: market-on-close — execute at close (no VWAP−close residual)
+    Trade dated ``t`` carries ``delta_dollars = Δn_adj × close_adj_t`` from
+    ``sod_trades``. Real shares and same-day VWAP vs close:
 
-    Returns ``(ok_frame, FillBuildStats)``. ``ok_frame`` has columns
-    ``date, infocode, side, delta_dollars, vwap, close, qty`` where ``vwap``
-    holds the execution price used for qty / residual.
+    * ``qty = |δ$_t| / close_t`` (unadjusted close)
+    * ``exec_px = VWAP_t`` (fallback close) or ``close_t`` under MOC
+    * costs **dated on t** (same day as lag-1 ``pre_t``)
+    * MOC: exec at close → zero slippage
+    * ``bid`` / ``ask`` passed through when present (EOD half-spread proxy)
+
+    Returns ``(ok_frame, FillBuildStats)`` with columns
+    ``date, infocode, side, delta_shares_adj, delta_dollars, vwap, close, qty``
+    plus ``bid``, ``ask`` when available on *prices*.
     """
     import numpy as np
     import pandas as pd
@@ -97,10 +181,13 @@ def join_trades_prices(trades, prices, *, fill: str = "vwap"):
         "date",
         "infocode",
         "side",
+        "delta_shares_adj",
         "delta_dollars",
         "vwap",
         "close",
         "qty",
+        "bid",
+        "ask",
     ]
     if n_trades == 0:
         return (
@@ -120,14 +207,21 @@ def join_trades_prices(trades, prices, *, fill: str = "vwap"):
     )
     vwap = merged["vwap"].to_numpy(dtype=np.float64, copy=False)
     close = merged["close"].to_numpy(dtype=np.float64, copy=False)
-    delta = merged["delta_dollars"].to_numpy(dtype=np.float64, copy=False)
+    d_dollars = merged["delta_dollars"].to_numpy(dtype=np.float64, copy=False)
     if mode == "moc":
         exec_px = close
     else:
-        # Prefer VWAP; fall back to close so we don't drop names missing VWAP only.
         exec_px = np.where(np.isfinite(vwap) & (vwap > 0), vwap, close)
-    ok = np.isfinite(exec_px) & (exec_px > 0) & np.isfinite(close) & (close > 0)
-    qty = np.where(ok, np.abs(delta) / exec_px, np.nan)
+    ok = (
+        np.isfinite(exec_px)
+        & (exec_px > 0)
+        & np.isfinite(close)
+        & (close > 0)
+        & np.isfinite(d_dollars)
+        & (d_dollars != 0)
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        qty = np.where(ok, np.abs(d_dollars) / close, np.nan)
     ok &= np.isfinite(qty) & (qty > 0)
     n_fills = int(ok.sum())
     n_dropped = n_trades - n_fills
@@ -136,24 +230,36 @@ def join_trades_prices(trades, prices, *, fill: str = "vwap"):
             pd.DataFrame(columns=empty_cols),
             FillBuildStats(n_trades=n_trades, n_fills=0, n_dropped=n_dropped),
         )
-    out = merged.loc[ok, ["date", "infocode", "side", "delta_dollars"]].copy()
-    # Column name stays ``vwap`` for qty/residual helpers (= exec price).
+    cols = ["date", "infocode", "side", "delta_dollars", "delta_shares_adj"]
+    out = merged.loc[ok, cols].copy()
     out["vwap"] = exec_px[ok]
     out["close"] = close[ok]
     out["qty"] = qty[ok]
+    if "bid" in merged.columns:
+        out["bid"] = merged.loc[ok, "bid"].to_numpy(dtype=np.float64, copy=False)
+    else:
+        out["bid"] = np.nan
+    if "ask" in merged.columns:
+        out["ask"] = merged.loc[ok, "ask"].to_numpy(dtype=np.float64, copy=False)
+    else:
+        out["ask"] = np.nan
     return out, FillBuildStats(n_trades=n_trades, n_fills=n_fills, n_dropped=n_dropped)
 
 
-def trades_to_fills(trades, prices) -> tuple[list[Fill], FillBuildStats]:
+def trades_to_fills(
+    trades, prices, *, include_spread: bool = True
+) -> tuple[list[Fill], FillBuildStats]:
     """Join trades to LSEG cost prices and build ``Fill`` rows.
 
-    ``qty = |delta_$| / VWAP``. Missing vwap/close rows are dropped.
-    Spread on combo fills is zero (VWAP already embeds liquidity).
-    ``order_id`` is ``YYYY-MM-DD-{infocode}`` for daily aggregation.
-
-    Prefer ``join_trades_prices`` + vectorized costing for large books.
+    ``qty = |δ$| / close_t``. ``Fill.close`` is same-day close. Spread is the
+    LSEG EOD ``BidAsk`` half-spread when *include_spread* and bid/ask are usable;
+    otherwise ``FullSpreadBps(0)``.
     """
+    import math
+
     import pandas as pd
+
+    from tcost_engine.types import BidAsk
 
     joined, stats = join_trades_prices(trades, prices)
     if stats.n_fills == 0:
@@ -163,12 +269,27 @@ def trades_to_fills(trades, prices) -> tuple[list[Fill], FillBuildStats]:
     fills: list[Fill] = []
     for row in joined.itertuples(index=False):
         day = pd.Timestamp(row.date).strftime("%Y-%m-%d")
+        spread = zero_spread
+        if include_spread:
+            bid = float(getattr(row, "bid", float("nan")))
+            ask = float(getattr(row, "ask", float("nan")))
+            if (
+                math.isfinite(bid)
+                and math.isfinite(ask)
+                and bid > 0
+                and ask > 0
+                and ask >= bid
+            ):
+                spread = BidAsk(
+                    format(Decimal(str(bid)), "f"),
+                    format(Decimal(str(ask)), "f"),
+                )
         fills.append(
             Fill(
                 side=Side.BUY if row.side == "buy" else Side.SELL,
                 quantity=format(Decimal(str(row.qty)), "f"),
                 price=format(Decimal(str(row.vwap)), "f"),
-                spread=zero_spread,
+                spread=spread,
                 symbol=str(int(row.infocode)),
                 order_id=f"{day}-{int(row.infocode)}",
                 close=format(Decimal(str(row.close)), "f"),
@@ -177,18 +298,23 @@ def trades_to_fills(trades, prices) -> tuple[list[Fill], FillBuildStats]:
     return fills, stats
 
 
-def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
+def cost_joined_trades(
+    joined, *, mils: object = 10, fill: str = "vwap", include_spread: bool = True
+):
     """Vectorized daily t-cost frame from ``join_trades_prices`` output.
 
-    Intraday slippage is *PnL-signed*:
+    Cost-signed, dated on trade day ``t`` (same day as lag-1 ``pre_t``):
 
-        intraday_slippage = side × (close − exec) × qty
+        qty                = |δ$_t| / close_t
+        commish            = (mils / 10_000) × qty
+        spread             = ((ask − bid) / 2) × qty   # EOD half-spread proxy
+        intraday_slippage  = side × (VWAP_t − close_t) × qty
 
-    (buy@exec>close / sell@exec<close → negative). Combo tcost is
-
-        total = commish + intraday_slippage
-
-    Under MOC, exec = close → slippage 0 and total = mils only.
+    ``δ$`` is the adjusted-share rebalance dollar. Paper assumes a free switch
+    at ``close_t``; reality works the trade at VWAP and pays half-spread on
+    top (VWAP alone is optimistic vs taking liquidity). Under MOC, exec =
+    close → commission only (slippage 0, spread 0; *include_spread* ignored).
+    Missing or invalid bid/ask → spread 0 for that fill.
     """
     import numpy as np
     import pandas as pd
@@ -220,13 +346,32 @@ def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
     side = np.where(joined["side"].to_numpy() == "buy", 1.0, -1.0)
     work = joined[["date"]].copy()
     work["commish"] = mils_d * qty
-    work["spread"] = 0.0
+    # MOC = fill at close: commission only. Spread applies to VWAP fills only.
+    if (
+        mode != "moc"
+        and include_spread
+        and "bid" in joined.columns
+        and "ask" in joined.columns
+    ):
+        bid = joined["bid"].to_numpy(dtype=np.float64, copy=False)
+        ask = joined["ask"].to_numpy(dtype=np.float64, copy=False)
+        half = np.where(
+            np.isfinite(bid)
+            & np.isfinite(ask)
+            & (bid > 0)
+            & (ask > 0)
+            & (ask >= bid),
+            (ask - bid) / 2.0,
+            0.0,
+        )
+        work["spread"] = half * qty
+    else:
+        work["spread"] = 0.0
     if mode == "moc":
         work["intraday_slippage"] = 0.0
     else:
-        # PnL-signed: buy high / sell low vs close → negative slippage.
-        work["intraday_slippage"] = side * (close - exec_px) * qty
-    work["trade_notional"] = exec_px * qty
+        work["intraday_slippage"] = side * (exec_px - close) * qty
+    work["trade_notional"] = close * qty  # = |δ$|
     work["n_fills"] = 1
     daily = (
         work.groupby("date", sort=True)
@@ -256,7 +401,7 @@ def cost_joined_trades(joined, *, mils: object = 10, fill: str = "vwap"):
     ]
 
 
-def _resolve_path(path: str | Path, *, cache_dir: str | Path | None) -> Path:
+def _resolve_path(path: str | Path, *, cache_dir: str | Path | None = None) -> Path:
     text = str(path)
     if not text.startswith("s3://"):
         local = Path(path)

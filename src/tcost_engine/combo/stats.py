@@ -39,18 +39,34 @@ def path_metrics(ret, *, periods_per_year: int = PERIODS_PER_YEAR) -> dict[str, 
     }
 
 
-def daily_turnover(panel):
-    """2-way daily TO: ``‖SOD_t − SOD_{t-1}‖₁ / ‖SOD_{t-1}‖₁`` (not halved)."""
+def daily_turnover(panel, prices=None):
+    """2-way daily TO: ``Σ|δ$_t| / ‖SOD_{t−1}‖₁`` (not halved).
+
+    When *prices* is provided, uses ``rebalance_dollars`` (same δ$ as
+    ``sod_trades``, with SOD 0 = unheld). Without *prices*, falls back to raw
+    dollar ``‖SOD_t − SOD_{t−1}‖₁`` (includes mark-to-market drift).
+    """
     import numpy as np
     import pandas as pd
 
-    if panel.empty or len(panel.index) < 2:
+    from tcost_engine.combo.sod import rebalance_dollars
+
+    if panel is None or panel.empty or len(panel.index) < 2:
         return pd.Series(dtype=float)
+
     prev = panel.shift(1)
     gmv_prev = prev.abs().sum(axis=1)
-    delta = (panel - prev).abs().sum(axis=1)
-    to = delta / gmv_prev.replace(0.0, np.nan)
-    out = to.iloc[1:].replace([np.inf, -np.inf], np.nan)
+
+    if prices is None or len(prices) == 0:
+        delta = (panel - prev).abs().sum(axis=1)
+        to = delta / gmv_prev.replace(0.0, np.nan)
+        out = to.iloc[1:].replace([np.inf, -np.inf], np.nan)
+    else:
+        _dn, d_dollars = rebalance_dollars(panel, prices)
+        delta = d_dollars.abs().sum(axis=1)
+        to = delta / gmv_prev.reindex(delta.index).replace(0.0, np.nan)
+        out = to.replace([np.inf, -np.inf], np.nan)
+
     out.index = pd.to_datetime(out.index).normalize()
     out.name = "daily_to"
     return out

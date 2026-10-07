@@ -24,7 +24,10 @@ from tcost_engine.types import TransactionCostError
 def add_debug_perturb_parser(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser(
         "debug-perturb",
-        help="Debugger perturb: Stage-C-style pre-tcost vs post-tcost tables",
+        help=(
+            "Debugger perturb: Stage-C-style pre-tcost vs post-tcost "
+            "(MOC fill + VWAP fill)"
+        ),
     )
     parser.add_argument(
         "--sod",
@@ -63,8 +66,13 @@ def add_debug_perturb_parser(sub: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "--fill",
         choices=("vwap", "moc"),
-        default="vwap",
-        help="Execution assumption: vwap (mils+VWAP−close) or moc (mils only)",
+        default=None,
+        help=argparse.SUPPRESS,  # deprecated: both scenarios always reported
+    )
+    parser.add_argument(
+        "--no-spread",
+        action="store_true",
+        help="Omit LSEG EOD half-spread from VWAP fill (MOC never charges spread)",
     )
     parser.add_argument("--json", action="store_true", help="Print JSON summary")
     parser.add_argument(
@@ -91,7 +99,8 @@ def cli_debug_perturb(args: argparse.Namespace) -> int:
             mils=args.mils,
             cache_dir=args.cache_dir,
             refresh=bool(args.refresh),
-            fill=str(args.fill),
+            include_spread=not bool(getattr(args, "no_spread", False)),
+            fill=getattr(args, "fill", None),
         )
     except Exception as exc:
         try:
@@ -120,7 +129,8 @@ def cli_debug_perturb(args: argparse.Namespace) -> int:
         print(f"wrote {out}/", file=sys.stderr)
         print("  README.md", file=sys.stderr)
         print("  pre_tcost_yearly.csv", file=sys.stderr)
-        print("  post_tcost_yearly.csv", file=sys.stderr)
+        print("  moc_post_tcost_yearly.csv", file=sys.stderr)
+        print("  vwap_post_tcost_yearly.csv", file=sys.stderr)
         print("  daily_pre_post.parquet (or .csv)", file=sys.stderr)
 
     if args.output:
